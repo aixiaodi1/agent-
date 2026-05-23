@@ -11,9 +11,19 @@ export function TraceTimeline({
   selectedEventId,
   onSelectEvent
 }: TraceTimelineProps) {
+  const eventTypeLabels: Record<AgentTraceEvent["type"], string> = {
+    node_start: "节点开始",
+    node_end: "节点结束",
+    state_update: "状态更新",
+    tool_call: "工具调用",
+    retrieval: "向量检索",
+    token_stream: "生成中",
+    final_answer: "最终回答"
+  };
+
   return (
     <section className="trace-panel">
-      <div className="panel-title">Trace Timeline</div>
+      <div className="panel-title">运行轨迹</div>
       <div className="event-list">
         {events.map((event) => (
           <button
@@ -22,7 +32,7 @@ export function TraceTimeline({
             type="button"
             onClick={() => onSelectEvent(event)}
           >
-            <span>{event.type}</span>
+            <span>{eventTypeLabels[event.type]}</span>
             <strong>{event.title}</strong>
             <small>{event.detail}</small>
           </button>

@@ -63,7 +63,7 @@ export function AgentWorkbench({ initialRun }: AgentWorkbenchProps) {
       setSelectedEventId(nextRun.events[0]?.id);
     } catch (error) {
       setErrorMessage(
-        error instanceof Error ? error.message : "Agent run request failed"
+        error instanceof Error ? error.message : "Agent 运行请求失败"
       );
     } finally {
       setIsRunning(false);
@@ -108,7 +108,7 @@ export function AgentWorkbench({ initialRun }: AgentWorkbenchProps) {
         />
 
         <section className="answer-panel">
-          <div className="panel-title">Final Answer</div>
+          <div className="panel-title">最终回答</div>
           <p>{run.finalAnswer}</p>
         </section>
       </section>

@@ -6,7 +6,7 @@ export async function POST(request: Request) {
   if (!apiBaseUrl) {
     return NextResponse.json(
       {
-        message: "AGENT_API_BASE_URL is not configured",
+        message: "还没有配置 AGENT_API_BASE_URL，无法连接 FastAPI 后端",
         statusCode: 503
       },
       { status: 503 }
@@ -27,7 +27,7 @@ export async function POST(request: Request) {
     if (!upstream.ok) {
       return NextResponse.json(
         {
-          message: "FastAPI agent run failed",
+          message: "FastAPI 运行 Agent 失败",
           statusCode: upstream.status,
           payload
         },
@@ -44,7 +44,7 @@ export async function POST(request: Request) {
   } catch (error) {
     return NextResponse.json(
       {
-        message: error instanceof Error ? error.message : "FastAPI agent run failed",
+        message: error instanceof Error ? error.message : "FastAPI 运行 Agent 失败",
         statusCode: 502
       },
       { status: 502 }

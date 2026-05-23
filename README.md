@@ -1,8 +1,8 @@
-# LangGraph Trace Workbench
+# LangGraph 轨迹调试台
 
-Next.js debugging console for a FastAPI + LangGraph Agent backend. The app starts in mock mode, so the workbench is usable before the backend is ready.
+这是一个用于调试 FastAPI + LangGraph Agent 后端的 Next.js 控制台。默认使用模拟数据，所以后端还没接好时也能先调界面和交互。
 
-## Commands
+## 常用命令
 
 ```bash
 npm install
@@ -11,25 +11,25 @@ npm run test:run
 npm run build
 ```
 
-## Modes
+## 运行模式
 
-Mock mode is the default:
+默认是模拟数据模式：
 
 ```env
 NEXT_PUBLIC_AGENT_API_MODE=mock
 ```
 
-Real mode sends browser requests to the Next.js proxy route at `POST /api/agent/run`, which forwards them to FastAPI:
+真实后端模式会先请求 Next.js 代理接口 `POST /api/agent/run`，再转发到 FastAPI：
 
 ```env
 NEXT_PUBLIC_AGENT_API_MODE=real
 AGENT_API_BASE_URL=http://localhost:8000
 ```
 
-The expected FastAPI endpoint is:
+FastAPI 需要提供这个接口：
 
 ```text
 POST /agent/run
 ```
 
-The response should include the run id, status, prompt, nodes, trace events, tool calls, vector matches, request JSON, response JSON, and final answer.
+返回内容建议包含运行 id、状态、输入指令、节点、轨迹事件、工具调用、向量库命中、请求 JSON、响应 JSON 和最终回答。

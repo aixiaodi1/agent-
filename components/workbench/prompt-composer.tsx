@@ -21,10 +21,10 @@ export function PromptComposer({
   return (
     <section className="prompt-composer">
       <div className="composer-topline">
-        <label htmlFor="prompt">Prompt</label>
+        <label htmlFor="prompt">调试指令</label>
         <span>
           <SquareTerminal aria-hidden="true" size={15} />
-          {apiMode === "mock" ? "Mock run" : "FastAPI run"}
+          {apiMode === "mock" ? "模拟运行" : "FastAPI 运行"}
         </span>
       </div>
       <textarea
@@ -34,10 +34,10 @@ export function PromptComposer({
         rows={4}
       />
       <div className="composer-actions">
-        <span>{prompt.trim() ? "Ready" : "Enter a prompt to run"}</span>
+        <span>{prompt.trim() ? "可以运行" : "输入调试指令后再运行"}</span>
         <button type="button" onClick={onRun} disabled={!canRun}>
           <Play aria-hidden="true" size={16} />
-          {isRunning ? "Running" : "Run"}
+          {isRunning ? "运行中" : "运行"}
         </button>
       </div>
     </section>

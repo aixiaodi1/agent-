@@ -13,7 +13,7 @@ export function NodeTimeline({
   onSelectNode
 }: NodeTimelineProps) {
   return (
-    <section className="node-timeline" aria-label="LangGraph nodes">
+    <section className="node-timeline" aria-label="LangGraph 节点">
       {nodes.map((node) => (
         <button
           className={node.id === selectedNodeId ? "node-step active" : "node-step"}

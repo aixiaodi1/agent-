@@ -82,7 +82,7 @@ export async function createAgentRun(
     const message =
       isRecord(payload) && typeof payload.message === "string"
         ? payload.message
-        : "Agent run request failed";
+        : "Agent 运行请求失败";
 
     throw new AgentRunError(message, response.status, payload);
   }

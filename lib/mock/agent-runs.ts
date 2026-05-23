@@ -19,48 +19,48 @@ export const mockAgentRun: AgentRun = {
   nodes: [
     {
       id: "start",
-      label: "Start",
+      label: "开始",
       status: "succeeded",
       startedAt,
       finishedAt: "2026-05-23T06:10:00.120Z",
       durationMs: 120,
-      stateSummary: "Accepted prompt and initialized debug state."
+      stateSummary: "接收调试指令，并初始化本次运行的调试状态。"
     },
     {
       id: "retrieve_context",
-      label: "Retrieve Context",
+      label: "检索上下文",
       status: "succeeded",
       startedAt: "2026-05-23T06:10:00.130Z",
       finishedAt: "2026-05-23T06:10:00.740Z",
       durationMs: 610,
-      stateSummary: "Loaded 3 vector matches from qdrant knowledge_base."
+      stateSummary: "从 qdrant 的 knowledge_base 集合读取到 3 条相关片段。"
     },
     {
       id: "call_tool",
-      label: "Call Tool",
+      label: "调用工具",
       status: "succeeded",
       startedAt: "2026-05-23T06:10:00.760Z",
       finishedAt: "2026-05-23T06:10:01.360Z",
       durationMs: 600,
-      stateSummary: "Called inspect_trace with current graph state."
+      stateSummary: "把当前图状态传给 inspect_trace 工具进行分析。"
     },
     {
       id: "generate_answer",
-      label: "Generate Answer",
+      label: "生成回答",
       status: "succeeded",
       startedAt: "2026-05-23T06:10:01.390Z",
       finishedAt: "2026-05-23T06:10:02.310Z",
       durationMs: 920,
-      stateSummary: "Generated final response with retrieved context and tool output."
+      stateSummary: "结合检索片段和工具输出生成最终回答。"
     },
     {
       id: "end",
-      label: "End",
+      label: "结束",
       status: "succeeded",
       startedAt: "2026-05-23T06:10:02.320Z",
       finishedAt,
       durationMs: 100,
-      stateSummary: "Persisted trace payload and completed run."
+      stateSummary: "整理运行轨迹并结束本次调试。"
     }
   ],
   events: [
@@ -69,8 +69,8 @@ export const mockAgentRun: AgentRun = {
       nodeId: "start",
       type: "node_start",
       timestamp: startedAt,
-      title: "Run started",
-      detail: "LangGraph state initialized.",
+      title: "运行开始",
+      detail: "LangGraph 状态已经初始化。",
       payload: { threadId: "thread_mock_001", debug: true }
     },
     {
@@ -78,8 +78,8 @@ export const mockAgentRun: AgentRun = {
       nodeId: "retrieve_context",
       type: "retrieval",
       timestamp: "2026-05-23T06:10:00.720Z",
-      title: "Vector search returned 3 matches",
-      detail: "Top hit explains the retrieval-before-tool policy.",
+      title: "向量检索返回 3 条结果",
+      detail: "最高分片段解释了为什么先检索再调用工具。",
       payload: { provider: "qdrant", collection: "knowledge_base", matches: 3 }
     },
     {
@@ -87,8 +87,8 @@ export const mockAgentRun: AgentRun = {
       nodeId: "call_tool",
       type: "tool_call",
       timestamp: "2026-05-23T06:10:01.220Z",
-      title: "inspect_trace completed",
-      detail: "Tool returned state transition analysis.",
+      title: "inspect_trace 工具完成",
+      detail: "工具返回了状态流转分析。",
       payload: { tool: "inspect_trace", status: "succeeded" }
     },
     {
@@ -96,8 +96,8 @@ export const mockAgentRun: AgentRun = {
       nodeId: "generate_answer",
       type: "token_stream",
       timestamp: "2026-05-23T06:10:01.900Z",
-      title: "Streaming final answer",
-      detail: "Completion tokens streamed to the client.",
+      title: "正在生成最终回答",
+      detail: "模型输出正在流式返回。",
       payload: { tokens: 468 }
     },
     {
@@ -105,8 +105,8 @@ export const mockAgentRun: AgentRun = {
       nodeId: "end",
       type: "final_answer",
       timestamp: finishedAt,
-      title: "Final answer ready",
-      detail: "Run completed successfully.",
+      title: "最终回答已生成",
+      detail: "本次运行已成功完成。",
       payload: { status: "succeeded" }
     }
   ],
@@ -121,7 +121,7 @@ export const mockAgentRun: AgentRun = {
         includeStateDiff: true
       },
       durationMs: 418,
-      resultPreview: "The graph retrieves context before tool execution because the router classified the prompt as knowledge-dependent."
+      resultPreview: "图先检索上下文，是因为路由器判断这个问题依赖知识库内容。"
     }
   ],
   vectorMatches: [
@@ -131,8 +131,8 @@ export const mockAgentRun: AgentRun = {
       provider: "qdrant",
       collection: "knowledge_base",
       score: 0.92,
-      title: "LangGraph routing policy",
-      contentPreview: "Knowledge-dependent prompts should retrieve context before invoking diagnostic tools.",
+      title: "LangGraph 路由策略",
+      contentPreview: "依赖知识库的问题应该先检索上下文，再调用诊断工具。",
       metadata: {
         source: "agent_playbook.md",
         chunk: 12
@@ -144,8 +144,8 @@ export const mockAgentRun: AgentRun = {
       provider: "qdrant",
       collection: "knowledge_base",
       score: 0.87,
-      title: "Trace inspection contract",
-      contentPreview: "The inspect_trace tool expects node ids, state summaries, and timing metadata.",
+      title: "轨迹检查工具协议",
+      contentPreview: "inspect_trace 工具需要节点 id、状态摘要和耗时信息。",
       metadata: {
         source: "tool_contracts.md",
         chunk: 4

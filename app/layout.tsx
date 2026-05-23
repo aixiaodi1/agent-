@@ -2,8 +2,8 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "LangGraph Trace Workbench",
-  description: "Debug FastAPI and LangGraph agent runs from a focused Next.js console."
+  title: "LangGraph 轨迹调试台",
+  description: "用于调试 FastAPI 和 LangGraph Agent 运行过程的 Next.js 控制台。"
 };
 
 export default function RootLayout({

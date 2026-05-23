@@ -37,7 +37,7 @@ export function InspectorPanel({
       <section className="inspector-section">
         <div className="section-heading">
           <Braces aria-hidden="true" size={16} />
-          <span>Selected Node</span>
+          <span>当前节点</span>
         </div>
         {node ? (
           <div className="node-detail">
@@ -46,35 +46,35 @@ export function InspectorPanel({
               <StatusPill status={node.status} />
             </div>
             <p>{node.stateSummary}</p>
-            <small>{node.durationMs ?? 0} ms</small>
+            <small>{node.durationMs ?? 0} 毫秒</small>
           </div>
         ) : (
-          <p className="empty-state">No node selected.</p>
+          <p className="empty-state">还没有选择节点。</p>
         )}
       </section>
 
       <section className="inspector-section">
         <div className="section-heading">
           <Wrench aria-hidden="true" size={16} />
-          <span>Tool Calls</span>
+          <span>工具调用</span>
         </div>
         {relatedTools.length ? (
           relatedTools.map((toolCall) => (
             <article className="detail-card" key={toolCall.id}>
               <strong>{toolCall.name}</strong>
               <p>{toolCall.resultPreview}</p>
-              <small>{toolCall.durationMs} ms</small>
+              <small>{toolCall.durationMs} 毫秒</small>
             </article>
           ))
         ) : (
-          <p className="empty-state">No tool calls for this node.</p>
+          <p className="empty-state">这个节点没有工具调用。</p>
         )}
       </section>
 
       <section className="inspector-section">
         <div className="section-heading">
           <Database aria-hidden="true" size={16} />
-          <span>VectorDB Matches</span>
+          <span>向量库命中</span>
         </div>
         {relatedMatches.length ? (
           relatedMatches.map((match) => (
@@ -87,13 +87,13 @@ export function InspectorPanel({
             </article>
           ))
         ) : (
-          <p className="empty-state">No vector matches for this node.</p>
+          <p className="empty-state">这个节点没有向量检索结果。</p>
         )}
       </section>
 
-      <JsonViewer label="Selected Event JSON" value={event?.payload ?? {}} />
-      <JsonViewer label="Request JSON" value={requestJson} />
-      <JsonViewer label="Response JSON" value={responseJson} />
+      <JsonViewer label="事件详情 JSON" value={event?.payload ?? {}} />
+      <JsonViewer label="请求 JSON" value={requestJson} />
+      <JsonViewer label="响应 JSON" value={responseJson} />
     </aside>
   );
 }

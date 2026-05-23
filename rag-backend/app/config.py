@@ -1,12 +1,17 @@
 from functools import lru_cache
 from pathlib import Path
 
-from pydantic import Field, field_validator
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
 class Settings(BaseSettings):
-    model_config = SettingsConfigDict(env_file=".env", env_file_encoding="utf-8", extra="ignore")
+    model_config = SettingsConfigDict(
+        env_file=".env",
+        env_file_encoding="utf-8",
+        extra="ignore",
+        populate_by_name=True,
+    )
 
     app_env: str = "local"
     database_url: str = "sqlite:///./data/rag.sqlite"
@@ -24,14 +29,27 @@ class Settings(BaseSettings):
     chunk_size: int = 500
     chunk_overlap: int = 50
     max_upload_mb: int = 50
-    allowed_extensions: list[str] = Field(default_factory=lambda: [".txt", ".md", ".pdf"])
+    allowed_extensions_raw: str = Field(default=".txt,.md,.pdf", alias="ALLOWED_EXTENSIONS")
 
-    @field_validator("allowed_extensions", mode="before")
+    @model_validator(mode="before")
     @classmethod
-    def parse_extensions(cls, value: object) -> object:
-        if isinstance(value, str):
-            return [item.strip().lower() for item in value.split(",") if item.strip()]
-        return value
+    def support_allowed_extensions_constructor_arg(cls, data: object) -> object:
+        if not isinstance(data, dict) or "allowed_extensions" not in data:
+            return data
+
+        value = data["allowed_extensions"]
+        if isinstance(value, list):
+            value = ",".join(str(item) for item in value)
+
+        return {**data, "allowed_extensions_raw": value}
+
+    @property
+    def allowed_extensions(self) -> list[str]:
+        return [
+            item.strip().lower()
+            for item in self.allowed_extensions_raw.split(",")
+            if item.strip()
+        ]
 
 
 @lru_cache

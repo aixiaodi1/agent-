@@ -33,3 +33,21 @@ def test_rq_queue_client_enqueues_ingestion_job_with_retry_policy() -> None:
     assert isinstance(retry, Retry)
     assert retry.max == 3
     assert retry.intervals == [10, 30, 60]
+
+
+def test_rq_queue_client_can_use_app_job_id_as_rq_job_id() -> None:
+    redis = Mock()
+    job = Mock(id="job_123")
+    queue = Mock()
+    queue.enqueue.return_value = job
+
+    with (
+        patch("app.infrastructure.queue.rq_queue.Redis.from_url", return_value=redis),
+        patch("app.infrastructure.queue.rq_queue.Queue", return_value=queue),
+    ):
+        client = RqQueueClient(redis_url="redis://redis:6379/2", queue_name="ingestion")
+
+    rq_job_id = client.enqueue_ingestion("doc_123", "docs", app_job_id="job_123")
+
+    assert rq_job_id == "job_123"
+    assert queue.enqueue.call_args.kwargs["job_id"] == "job_123"

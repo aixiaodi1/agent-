@@ -4,6 +4,7 @@ from typing import Any
 from rq import get_current_job
 
 from app.dependencies import get_ingestion_service, get_job_service
+from app.errors import NonRetryableIngestionError
 
 logger = logging.getLogger(__name__)
 
@@ -19,6 +20,13 @@ def ingest_document_job(document_id: str, collection: str) -> None:
 
     try:
         ingestion_service.ingest_document(app_job.id, document_id, collection)
+    except NonRetryableIngestionError:
+        logger.exception(
+            "Ingestion worker consumed non-retryable failure for app job %s, document %s, RQ job %s",
+            app_job.id,
+            document_id,
+            rq_job.id,
+        )
     except Exception as exc:
         logger.exception(
             "Ingestion worker failed for app job %s, document %s, RQ job %s",

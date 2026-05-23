@@ -144,15 +144,33 @@ class FakeUploadFile:
 class FakeQueue:
     def __init__(self) -> None:
         self.enqueued: list[tuple[str, str]] = []
+        self.app_job_ids: list[str | None] = []
 
-    def enqueue_ingestion(self, document_id: str, collection: str) -> str:
+    def enqueue_ingestion(self, document_id: str, collection: str, app_job_id: str | None = None) -> str:
         self.enqueued.append((document_id, collection))
-        return f"rq-{len(self.enqueued)}"
+        self.app_job_ids.append(app_job_id)
+        return app_job_id or f"rq-{len(self.enqueued)}"
 
 
 class FailingQueue:
-    def enqueue_ingestion(self, document_id: str, collection: str) -> str:
+    def enqueue_ingestion(self, document_id: str, collection: str, app_job_id: str | None = None) -> str:
         raise RuntimeError("queue unavailable")
+
+
+class RepositoryAwareQueue:
+    def __init__(self, repository: FakeRepository) -> None:
+        self.repository = repository
+        self.observed_attached_before_enqueue = False
+
+    def enqueue_ingestion(self, document_id: str, collection: str, app_job_id: str | None = None) -> str:
+        assert app_job_id is not None
+        self.observed_attached_before_enqueue = self.repository.get_job(app_job_id).rq_job_id == app_job_id
+        return app_job_id
+
+
+class AttachFailingRepository(FakeRepository):
+    def set_job_rq_id(self, job_id: str, rq_job_id: str) -> None:
+        raise RuntimeError("attach failed")
 
 
 class FakeParser:
@@ -266,8 +284,42 @@ def test_document_service_upload_files_saves_creates_jobs_and_enqueues(tmp_path:
     assert repository.get_document(document.id).source_path == str(saved_path)
     assert document.content_hash == "d5998278b9de71718106464bf36ffd0b37e4eb7e2592b0cfd3081e316ac78313"
     assert job.document_id == document.id
-    assert repository.get_job(job.id).rq_job_id == "rq-1"
+    assert repository.get_job(job.id).rq_job_id == job.id
     assert queue.enqueued == [(document.id, "docs")]
+    assert queue.app_job_ids == [job.id]
+
+
+def test_document_service_attaches_deterministic_rq_id_before_enqueue(tmp_path: Path) -> None:
+    repository = FakeRepository()
+    queue = RepositoryAwareQueue(repository)
+    service = DocumentService(
+        repository=repository,
+        job_service=JobService(repository),
+        queue_client=queue,
+        settings=Settings(upload_dir=tmp_path, allowed_extensions=[".txt"], max_upload_mb=1),
+    )
+
+    result = asyncio.run(service.upload_files([FakeUploadFile("Guide.TXT", b"hello rag")], "docs"))
+
+    job = result["jobs"][0]
+    assert job.rq_job_id == job.id
+    assert queue.observed_attached_before_enqueue is True
+
+
+def test_document_service_does_not_enqueue_when_deterministic_attach_fails(tmp_path: Path) -> None:
+    repository = AttachFailingRepository()
+    queue = FakeQueue()
+    service = DocumentService(
+        repository=repository,
+        job_service=JobService(repository),
+        queue_client=queue,
+        settings=Settings(upload_dir=tmp_path, allowed_extensions=[".txt"], max_upload_mb=1),
+    )
+
+    with pytest.raises(RuntimeError, match="attach failed"):
+        asyncio.run(service.upload_files([FakeUploadFile("Guide.TXT", b"hello rag")], "docs"))
+
+    assert queue.enqueued == []
 
 
 def test_document_service_marks_failed_and_cleans_file_when_queue_fails(tmp_path: Path) -> None:

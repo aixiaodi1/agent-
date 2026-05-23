@@ -62,9 +62,15 @@ class DocumentService:
                 document = self.repository.update_document_source_path(document.id, str(final_path))
 
                 job = self.job_service.create_job(document.id, normalized_collection)
-                rq_job = self.queue_client.enqueue_ingestion(document.id, normalized_collection)
+                job = self.job_service.attach_rq_job(job.id, job.id)
+                rq_job = self.queue_client.enqueue_ingestion(
+                    document.id,
+                    normalized_collection,
+                    app_job_id=job.id,
+                )
                 rq_job_id = getattr(rq_job, "id", rq_job)
-                job = self.job_service.attach_rq_job(job.id, str(rq_job_id))
+                if str(rq_job_id) != job.rq_job_id:
+                    job = self.job_service.attach_rq_job(job.id, str(rq_job_id))
             except Exception as exc:
                 error = str(exc)
                 self._mark_failed_best_effort(document.id, job.id if job else None, error)

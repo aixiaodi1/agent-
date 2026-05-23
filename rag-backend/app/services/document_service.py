@@ -1,4 +1,5 @@
 import inspect
+import shutil
 from hashlib import sha256
 from pathlib import Path
 from typing import Protocol
@@ -58,14 +59,21 @@ class DocumentService:
             )
 
             final_path = self.settings.upload_dir / document.id / f"original{extension}"
-            final_path.parent.mkdir(parents=True, exist_ok=True)
-            final_path.write_bytes(content)
-            document = self.repository.update_document_source_path(document.id, str(final_path))
+            job = None
+            try:
+                final_path.parent.mkdir(parents=True, exist_ok=True)
+                final_path.write_bytes(content)
+                document = self.repository.update_document_source_path(document.id, str(final_path))
 
-            job = self.job_service.create_job(document.id, normalized_collection)
-            rq_job = self.queue_client.enqueue_ingestion(document.id, normalized_collection)
-            rq_job_id = getattr(rq_job, "id", rq_job)
-            job = self.job_service.attach_rq_job(job.id, str(rq_job_id))
+                job = self.job_service.create_job(document.id, normalized_collection)
+                rq_job = self.queue_client.enqueue_ingestion(document.id, normalized_collection)
+                rq_job_id = getattr(rq_job, "id", rq_job)
+                job = self.job_service.attach_rq_job(job.id, str(rq_job_id))
+            except Exception as exc:
+                error = str(exc)
+                self._mark_failed_best_effort(document.id, job.id if job else None, error)
+                self._remove_upload_best_effort(final_path, document.id)
+                raise
 
             documents.append(document)
             jobs.append(job)
@@ -88,3 +96,28 @@ class DocumentService:
         max_bytes = self.settings.max_upload_mb * 1024 * 1024
         if size_bytes > max_bytes:
             raise ValidationError(f"Uploaded file exceeds {self.settings.max_upload_mb} MB.")
+
+    def _mark_failed_best_effort(self, document_id: str, job_id: str | None, error: str) -> None:
+        try:
+            self.repository.mark_document_failed(document_id, error)
+        except Exception:
+            pass
+        if job_id is None:
+            return
+        try:
+            self.job_service.mark_failed(job_id, error)
+        except Exception:
+            pass
+
+    def _remove_upload_best_effort(self, final_path: Path, document_id: str) -> None:
+        try:
+            upload_root = self.settings.upload_dir.resolve()
+            document_dir = (self.settings.upload_dir / document_id).resolve()
+            if document_dir.parent != upload_root:
+                return
+            if final_path.exists():
+                final_path.unlink()
+            if document_dir.exists():
+                shutil.rmtree(document_dir)
+        except Exception:
+            pass

@@ -46,8 +46,8 @@ class IngestionService:
             self.job_service.update_progress(job_id, JobStage.CHUNKING, 35)
 
             texts = [chunk.text for chunk in chunks]
-            embeddings = self.embedding_provider.embed_texts(texts)
             self.job_service.update_progress(job_id, JobStage.EMBEDDING, 65)
+            embeddings = self.embedding_provider.embed_texts(texts)
 
             ids = [f"{document_id}:{chunk.chunk_index}" for chunk in chunks]
             metadatas = [
@@ -58,11 +58,13 @@ class IngestionService:
                     "collection": collection,
                     "chunk_index": chunk.chunk_index,
                     "upload_time": document.created_at,
-                    "source": document.source_path,
+                    "source": "upload",
+                    "source_path": document.source_path,
                     "content_hash": document.content_hash,
                 }
                 for chunk in chunks
             ]
+            self.job_service.update_progress(job_id, JobStage.WRITING, 90)
             self.vector_store.add_chunks(
                 collection=collection,
                 ids=ids,
@@ -70,7 +72,6 @@ class IngestionService:
                 embeddings=embeddings,
                 metadatas=metadatas,
             )
-            self.job_service.update_progress(job_id, JobStage.WRITING, 90)
 
             self.repository.add_chunks(
                 document_id=document_id,
@@ -104,6 +105,10 @@ class IngestionService:
                 error=str(exc),
             )
             raise
+
+    def mark_retry_exhausted(self, job_id: str, document_id: str, error: str) -> None:
+        self.repository.mark_document_failed(document_id, error)
+        self.job_service.mark_failed(job_id, error)
 
 
 def ingest_document(job_id: str, document_id: str, collection: str) -> None:

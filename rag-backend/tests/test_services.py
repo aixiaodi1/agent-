@@ -150,6 +150,11 @@ class FakeQueue:
         return f"rq-{len(self.enqueued)}"
 
 
+class FailingQueue:
+    def enqueue_ingestion(self, document_id: str, collection: str) -> str:
+        raise RuntimeError("queue unavailable")
+
+
 class FakeParser:
     def __init__(self, text: str) -> None:
         self.text = text
@@ -182,6 +187,18 @@ class FakeEmbeddingProvider:
         return [[0.1, 0.2], [0.3, 0.4]]
 
 
+class StageCapturingEmbeddingProvider(FakeEmbeddingProvider):
+    def __init__(self, repository: FakeRepository, job_id: str) -> None:
+        super().__init__()
+        self.repository = repository
+        self.job_id = job_id
+        self.stage_at_call: JobStage | None = None
+
+    def embed_texts(self, texts: list[str]) -> list[list[float]]:
+        self.stage_at_call = self.repository.get_job(self.job_id).stage
+        return super().embed_texts(texts)
+
+
 class FakeVectorStore:
     def __init__(self) -> None:
         self.calls: list[dict] = []
@@ -203,6 +220,25 @@ class FakeVectorStore:
                 "metadatas": metadatas,
             }
         )
+
+
+class StageCapturingVectorStore(FakeVectorStore):
+    def __init__(self, repository: FakeRepository, job_id: str) -> None:
+        super().__init__()
+        self.repository = repository
+        self.job_id = job_id
+        self.stage_at_call: JobStage | None = None
+
+    def add_chunks(
+        self,
+        collection: str,
+        ids: list[str],
+        texts: list[str],
+        embeddings: list[list[float]],
+        metadatas: list[dict],
+    ) -> None:
+        self.stage_at_call = self.repository.get_job(self.job_id).stage
+        super().add_chunks(collection, ids, texts, embeddings, metadatas)
 
 
 def test_document_service_upload_files_saves_creates_jobs_and_enqueues(tmp_path: Path) -> None:
@@ -232,6 +268,28 @@ def test_document_service_upload_files_saves_creates_jobs_and_enqueues(tmp_path:
     assert job.document_id == document.id
     assert repository.get_job(job.id).rq_job_id == "rq-1"
     assert queue.enqueued == [(document.id, "docs")]
+
+
+def test_document_service_marks_failed_and_cleans_file_when_queue_fails(tmp_path: Path) -> None:
+    repository = FakeRepository()
+    service = DocumentService(
+        repository=repository,
+        job_service=JobService(repository),
+        queue_client=FailingQueue(),
+        settings=Settings(upload_dir=tmp_path, allowed_extensions=[".txt"], max_upload_mb=1),
+    )
+
+    with pytest.raises(RuntimeError, match="queue unavailable"):
+        asyncio.run(service.upload_files([FakeUploadFile("Guide.TXT", b"hello rag")], "docs"))
+
+    document = repository.get_document("doc_1")
+    job = repository.get_job("job_1")
+    assert document.status == DocumentStatus.FAILED
+    assert document.error == "queue unavailable"
+    assert job.status == JobStatus.FAILED
+    assert job.error == "queue unavailable"
+    assert not (tmp_path / document.id / "original.txt").exists()
+    assert not (tmp_path / document.id).exists()
 
 
 @pytest.mark.parametrize(
@@ -358,7 +416,8 @@ def test_ingestion_service_writes_chroma_ids_and_metadata(tmp_path: Path) -> Non
             "collection": "docs",
             "chunk_index": 0,
             "upload_time": document.created_at,
-            "source": str(tmp_path / "guide.md"),
+            "source": "upload",
+            "source_path": str(tmp_path / "guide.md"),
             "content_hash": "hash123",
         },
         {
@@ -368,7 +427,8 @@ def test_ingestion_service_writes_chroma_ids_and_metadata(tmp_path: Path) -> Non
             "collection": "docs",
             "chunk_index": 1,
             "upload_time": document.created_at,
-            "source": str(tmp_path / "guide.md"),
+            "source": "upload",
+            "source_path": str(tmp_path / "guide.md"),
             "content_hash": "hash123",
         },
     ]
@@ -394,6 +454,35 @@ def test_ingestion_service_writes_chroma_ids_and_metadata(tmp_path: Path) -> Non
             "upload_time": document.created_at,
         },
     ]
+
+
+def test_ingestion_service_reports_embedding_and_writing_before_slow_calls(tmp_path: Path) -> None:
+    repository = FakeRepository()
+    document = repository.create_document(
+        filename="guide.md",
+        collection="docs",
+        mime_type="text/markdown",
+        file_size=42,
+        source_path=str(tmp_path / "guide.md"),
+        content_hash="hash123",
+    )
+    Path(document.source_path).write_text("# Guide", encoding="utf-8")
+    job = repository.create_job(document.id, "docs")
+    embeddings = StageCapturingEmbeddingProvider(repository, job.id)
+    vector_store = StageCapturingVectorStore(repository, job.id)
+    service = IngestionService(
+        repository=repository,
+        job_service=JobService(repository),
+        parser=FakeParser("parsed text"),
+        chunker=FakeChunker(),
+        embedding_provider=embeddings,
+        vector_store=vector_store,
+    )
+
+    service.ingest_document(job.id, document.id, "docs")
+
+    assert embeddings.stage_at_call == JobStage.EMBEDDING
+    assert vector_store.stage_at_call == JobStage.WRITING
 
 
 def test_ingestion_service_marks_empty_parsed_text_failed_without_retry(tmp_path: Path) -> None:
@@ -460,3 +549,33 @@ def test_ingestion_service_persists_retryable_error_and_preserves_progress(tmp_p
     assert stored_job.progress == 20
     assert stored_job.error == "parser temporarily unavailable"
     assert stored_document.status == DocumentStatus.INDEXING
+
+
+def test_ingestion_service_marks_retry_exhausted_failed() -> None:
+    repository = FakeRepository()
+    document = repository.create_document(
+        filename="retry.txt",
+        collection="docs",
+        mime_type="text/plain",
+        file_size=1,
+        source_path="/tmp/retry.txt",
+        content_hash="hash123",
+    )
+    job = repository.create_job(document.id, "docs")
+    service = IngestionService(
+        repository=repository,
+        job_service=JobService(repository),
+        parser=FakeParser("parsed text"),
+        chunker=FakeChunker(),
+        embedding_provider=FakeEmbeddingProvider(),
+        vector_store=FakeVectorStore(),
+    )
+
+    service.mark_retry_exhausted(job.id, document.id, "retries exhausted")
+
+    stored_job = repository.get_job(job.id)
+    stored_document = repository.get_document(document.id)
+    assert stored_job.status == JobStatus.FAILED
+    assert stored_job.error == "retries exhausted"
+    assert stored_document.status == DocumentStatus.FAILED
+    assert stored_document.error == "retries exhausted"

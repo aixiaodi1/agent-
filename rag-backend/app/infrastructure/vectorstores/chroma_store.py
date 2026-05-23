@@ -9,6 +9,22 @@ class ChromaVectorStore:
     def __init__(self, persist_dir: Path) -> None:
         persist_dir.mkdir(parents=True, exist_ok=True)
         self.client = chromadb.PersistentClient(path=str(persist_dir))
+        self._closed = False
+
+    def close(self) -> None:
+        if self._closed:
+            return
+
+        close = getattr(self.client, "close", None)
+        if callable(close):
+            close()
+        else:
+            system = getattr(self.client, "_system", None)
+            stop = getattr(system, "stop", None)
+            if callable(stop):
+                stop()
+
+        self._closed = True
 
     def ensure_collection(self, name: str) -> None:
         self.client.get_or_create_collection(name)

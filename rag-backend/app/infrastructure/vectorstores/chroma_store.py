@@ -2,7 +2,7 @@ from pathlib import Path
 
 import chromadb
 
-from app.errors import RetryableIngestionError
+from app.errors import NonRetryableIngestionError, RetryableIngestionError
 
 
 class ChromaVectorStore:
@@ -26,6 +26,18 @@ class ChromaVectorStore:
         embeddings: list[list[float]],
         metadatas: list[dict],
     ) -> None:
+        if len({len(ids), len(texts), len(embeddings), len(metadatas)}) != 1:
+            raise NonRetryableIngestionError("Chroma chunk ids, texts, embeddings, and metadatas must have the same length.")
+
+        if len(ids) != len(set(ids)):
+            raise NonRetryableIngestionError("Chroma chunk ids must not contain duplicate values.")
+
+        if any(not isinstance(metadata, dict) for metadata in metadatas):
+            raise NonRetryableIngestionError("Chroma chunk metadata entries must be dictionaries.")
+
+        if any(not isinstance(embedding, list) for embedding in embeddings):
+            raise NonRetryableIngestionError("Chroma chunk embedding entries must be lists.")
+
         try:
             target = self.client.get_or_create_collection(collection)
             target.add(ids=ids, embeddings=embeddings, documents=texts, metadatas=metadatas)

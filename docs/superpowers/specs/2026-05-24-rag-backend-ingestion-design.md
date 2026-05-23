@@ -22,6 +22,8 @@ The existing LangGraph trace debugging frontend remains the place for testing Ag
 - ChromaDB local file persistence for the first version.
 - SQLite metadata database for documents, ingestion jobs, and chunks.
 - Local Embedding API adapter.
+- API keys are injected through environment variables, not committed config files.
+- Default text chunking uses `chunk_size=500` and `overlap=50`; both values remain configurable.
 - Clean abstractions so the vector store can later switch from ChromaDB to Milvus.
 
 ### Out of Scope
@@ -311,7 +313,8 @@ uploaded | indexing | indexed | failed
 13. ChromaVectorStore writes chunk texts, embeddings, ids, and metadata to ChromaDB.
 14. Repository records chunk metadata and Chroma ids in SQLite.
 15. JobService marks job succeeded and document indexed.
-16. If any step fails, job and document are marked failed with the error message.
+16. If a retryable step fails, RQ retries the job up to 3 times after the initial failed attempt.
+17. If all retry attempts fail, the job and document are marked failed with the error message and the worker writes a structured log entry.
 ```
 
 Progress mapping:
@@ -323,6 +326,16 @@ chunking: 35
 embedding: 65
 writing: 90
 done: 100
+```
+
+Retry policy:
+
+```text
+max_retries: 3
+max_attempts_including_initial_run: 4
+retryable failures: parser IO errors, transient Embedding API errors, transient Chroma write errors
+non-retryable failures: unsupported extension, empty parsed text, embedding dimension mismatch
+final failure behavior: status=failed, document.status=failed, error saved to SQLite, structured log written
 ```
 
 ## Persistence Design
@@ -388,6 +401,8 @@ chunk_index
 chroma_id
 content_preview
 token_count
+source_file
+upload_time
 created_at
 ```
 
@@ -405,8 +420,10 @@ Chroma metadata:
 {
   "document_id": "doc_...",
   "filename": "example.pdf",
+  "source_file": "example.pdf",
   "collection": "default",
   "chunk_index": 0,
+  "upload_time": "2026-05-24T10:00:00+08:00",
   "source": "upload",
   "content_hash": "sha256..."
 }
@@ -431,7 +448,7 @@ class LocalApiEmbeddingProvider:
     ...
 ```
 
-This adapter calls the user's existing local Embedding API. API keys and endpoint URLs are read from environment variables.
+This adapter calls the user's existing local Embedding API. It supports providers exposed by that local API, including MiniMax `embo-01` when configured. API keys are injected through environment variables such as `EMBEDDING_API_KEY` or provider-specific variables like `MINIMAX_API_KEY`; committed config files must not contain secrets.
 
 ### Vector Store
 
@@ -539,12 +556,13 @@ RQ_QUEUE_NAME=rag-ingestion
 
 EMBEDDING_API_BASE_URL=http://localhost:xxxx
 EMBEDDING_API_KEY=
-EMBEDDING_MODEL=your-local-embedding-model
+MINIMAX_API_KEY=
+EMBEDDING_MODEL=embo-01
 EMBEDDING_DIMENSION=1024
 EMBEDDING_BATCH_SIZE=32
 
-CHUNK_SIZE=800
-CHUNK_OVERLAP=120
+CHUNK_SIZE=500
+CHUNK_OVERLAP=50
 MAX_UPLOAD_MB=50
 ALLOWED_EXTENSIONS=.txt,.md,.pdf
 ```
@@ -554,6 +572,7 @@ Operational notes:
 - Redis is installed and started inside WSL through `apt`.
 - Windows must be able to reach Redis through the configured `REDIS_URL`, or the full FastAPI/RQ stack should run inside WSL.
 - `CHROMA_PERSIST_DIR` must point to a writable directory.
+- Embedding API keys are provided by environment variables only. `.env.example` may list variable names but must leave secret values empty.
 - If the existing RAG chain runs in a different environment, both processes must resolve `CHROMA_PERSIST_DIR` to the same physical storage location.
 
 ## Error Handling
@@ -568,11 +587,11 @@ Request-time errors:
 
 Worker-time errors:
 
-- Parser failure marks job failed and document failed.
-- Empty parsed text marks job failed and document failed.
-- Embedding API failure marks job failed and document failed.
-- Embedding dimension mismatch marks job failed and document failed.
-- Chroma write failure marks job failed and document failed.
+- Retryable parser IO failures retry up to 3 times after the initial failed attempt, then mark job failed and document failed.
+- Empty parsed text is non-retryable and immediately marks job failed and document failed.
+- Retryable Embedding API failures retry up to 3 times after the initial failed attempt, then mark job failed and document failed.
+- Embedding dimension mismatch is non-retryable and immediately marks job failed and document failed.
+- Retryable Chroma write failures retry up to 3 times after the initial failed attempt, then mark job failed and document failed.
 
 All worker-time failures are saved to:
 
@@ -581,7 +600,7 @@ ingestion_jobs.error
 documents.error
 ```
 
-The management page displays the latest job error in the Job area.
+The worker also writes structured logs for failed attempts and final failures. The management page displays the latest persisted job error in the Job area.
 
 ## Local Runbook
 
@@ -619,7 +638,8 @@ The existing LangGraph trace debugging frontend continues to run separately and 
 - Markdown parser extracts `.md` content.
 - PDF parser extracts readable `.pdf` text.
 - Chunker respects `CHUNK_SIZE` and `CHUNK_OVERLAP`.
-- Local Embedding API adapter sends the expected request and validates response dimensions.
+- Chunker defaults to `CHUNK_SIZE=500` and `CHUNK_OVERLAP=50` when no override is provided.
+- Local Embedding API adapter sends the expected request, reads API keys from environment variables, and validates response dimensions.
 - Chroma vector store writes chunks, ids, embeddings, and metadata to a temporary persistent directory.
 - Job service transitions jobs through queued, running, succeeded, and failed.
 - Document service saves uploaded files and enqueues jobs through a fake queue client.
@@ -632,6 +652,8 @@ The existing LangGraph trace debugging frontend continues to run separately and 
 - `GET /documents` returns documents with chunk counts.
 - A worker execution indexes a fixture document into ChromaDB and records chunks in SQLite.
 - Failure in parser, embedding, or Chroma write updates job and document status to failed.
+- Retryable worker failures retry up to 3 times after the initial failed attempt before final failed status is persisted.
+- Chroma metadata includes `source_file`, `chunk_index`, and `upload_time`.
 
 ### Manual Verification
 

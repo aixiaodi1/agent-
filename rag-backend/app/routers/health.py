@@ -12,11 +12,11 @@ from app.infrastructure.vectorstores.base import VectorStore
 router = APIRouter(tags=["health"])
 
 
-def _run_check(check: Callable[[], None]) -> dict:
+def _run_check(check: Callable[[], object]) -> dict:
     try:
         check()
-    except Exception as exc:
-        return {"status": "error", "error": str(exc)}
+    except Exception:
+        return {"status": "error", "error": "check_failed"}
     return {"status": "ok"}
 
 
@@ -30,6 +30,11 @@ def _check_redis(queue_client: QueueClient) -> None:
         redis_client.ping()
 
 
+def _check_embedding_provider(embedder: EmbeddingProvider) -> None:
+    if not callable(getattr(embedder, "embed_texts", None)):
+        raise RuntimeError("embedding provider unavailable")
+
+
 @router.get("/health")
 def health(
     repository: Repository = Depends(get_repository),
@@ -41,7 +46,7 @@ def health(
         "api": {"status": "ok"},
         "redis": _run_check(lambda: _check_redis(queue_client)),
         "chroma": _run_check(lambda: vector_store.list_collections()),
-        "embedding_api": _run_check(lambda: embedder.embed_texts(["healthcheck"])),
+        "embedding_api": _run_check(lambda: _check_embedding_provider(embedder)),
         "sqlite": _run_check(repository.initialize),
     }
     overall_status = "ok" if all(check["status"] == "ok" for check in checks.values()) else "degraded"

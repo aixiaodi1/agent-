@@ -71,6 +71,11 @@ class RejectingDocumentService:
         raise ValidationError("Unsupported file extension: .xlsx.")
 
 
+class FailingDocumentService:
+    async def upload_files(self, files: list, collection: str) -> dict:
+        raise RuntimeError("storage unavailable: fake-secret-token")
+
+
 class FakeRepository:
     def __init__(self) -> None:
         self.documents = [
@@ -109,9 +114,23 @@ class FakeVectorStore:
         return ["drafts", "guides"]
 
 
+class FailingVectorStore:
+    def list_collections(self) -> list[str]:
+        raise RuntimeError("chroma unavailable at internal://fake-secret-host")
+
+
 class FakeEmbedder:
     def embed_texts(self, texts: list[str]) -> list[list[float]]:
         return [[0.1] for _ in texts]
+
+
+class NonCallingEmbedder:
+    def __init__(self) -> None:
+        self.called = False
+
+    def embed_texts(self, texts: list[str]) -> list[list[float]]:
+        self.called = True
+        raise AssertionError("embed_texts should not be called")
 
 
 def make_client(overrides: dict | None = None) -> TestClient:
@@ -151,6 +170,20 @@ def test_upload_rejects_xlsx_with_400() -> None:
 
     assert response.status_code == 400
     assert response.json() == {"detail": "Unsupported file extension: .xlsx."}
+
+
+def test_upload_unexpected_error_returns_generic_503_without_secret() -> None:
+    client = make_client({get_document_service: lambda: FailingDocumentService()})
+
+    response = client.post(
+        "/documents/upload",
+        data={"collection": "guides"},
+        files=[("files", ("guide.txt", b"hello world", "text/plain"))],
+    )
+
+    assert response.status_code == 503
+    assert response.json() == {"detail": "Document upload failed"}
+    assert "fake-secret-token" not in response.text
 
 
 def test_get_job_returns_status_stage_progress_error_and_timestamps() -> None:
@@ -247,4 +280,42 @@ def test_health_returns_degraded_when_a_check_fails() -> None:
     body = response.json()
     assert body["status"] == "degraded"
     assert body["checks"]["redis"]["status"] == "error"
-    assert body["checks"]["redis"]["error"] == "redis unavailable"
+    assert body["checks"]["redis"]["error"] == "check_failed"
+    assert "redis unavailable" not in response.text
+
+
+def test_health_degraded_errors_do_not_leak_raw_exception_text() -> None:
+    client = make_client(
+        {
+            get_repository: lambda: FakeRepository(),
+            get_queue_client: lambda: FakeQueueClient(),
+            get_vector_store: lambda: FailingVectorStore(),
+            get_embedder: lambda: FakeEmbedder(),
+        }
+    )
+
+    response = client.get("/health")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "degraded"
+    assert body["checks"]["chroma"] == {"status": "error", "error": "check_failed"}
+    assert "internal://fake-secret-host" not in response.text
+
+
+def test_health_embedding_check_does_not_call_embed_texts() -> None:
+    embedder = NonCallingEmbedder()
+    client = make_client(
+        {
+            get_repository: lambda: FakeRepository(),
+            get_queue_client: lambda: FakeQueueClient(),
+            get_vector_store: lambda: FakeVectorStore(),
+            get_embedder: lambda: embedder,
+        }
+    )
+
+    response = client.get("/health")
+
+    assert response.status_code == 200
+    assert response.json()["checks"]["embedding_api"] == {"status": "ok"}
+    assert embedder.called is False

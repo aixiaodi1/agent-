@@ -15,6 +15,8 @@ class LocalApiEmbeddingProvider:
     ) -> None:
         if batch_size <= 0:
             raise NonRetryableIngestionError("Embedding batch size must be greater than zero.")
+        if dimension <= 0:
+            raise ValueError("Embedding dimension must be greater than zero.")
 
         self._base_url = base_url.rstrip("/")
         self._path = path if path.startswith("/") else f"/{path}"
@@ -48,7 +50,19 @@ class LocalApiEmbeddingProvider:
         except httpx.HTTPError as exc:
             raise RetryableIngestionError("Embedding API request failed.") from exc
 
-        return self._parse_embeddings(response.json())
+        try:
+            payload = response.json()
+        except ValueError as exc:
+            raise NonRetryableIngestionError("Embedding API response was not valid JSON.") from exc
+
+        embeddings = self._parse_embeddings(payload)
+        if len(embeddings) != len(texts):
+            raise NonRetryableIngestionError(
+                f"Embedding API expected {len(texts)} embeddings for the request batch, "
+                f"but returned {len(embeddings)}."
+            )
+
+        return embeddings
 
     def _parse_embeddings(self, payload: object) -> list[list[float]]:
         if not isinstance(payload, dict):

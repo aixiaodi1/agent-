@@ -52,6 +52,42 @@ def test_local_embedding_provider_rejects_dimension_mismatch(httpx_mock) -> None
         provider.embed_texts(["alpha"])
 
 
+@pytest.mark.parametrize(
+    ("texts", "embeddings"),
+    [
+        (["alpha", "beta"], [[0.1, 0.2, 0.3]]),
+        (["alpha"], [[0.1, 0.2, 0.3], [0.4, 0.5, 0.6]]),
+    ],
+)
+def test_local_embedding_provider_rejects_response_count_mismatch(httpx_mock, texts, embeddings) -> None:
+    httpx_mock.add_response(
+        method="POST",
+        url="http://localhost:9000/v1/embeddings",
+        json={"embeddings": embeddings},
+    )
+    provider = LocalApiEmbeddingProvider("http://localhost:9000", "/v1/embeddings", "", "embo-01", 3, 32)
+
+    with pytest.raises(NonRetryableIngestionError, match="expected.*embedding"):
+        provider.embed_texts(texts)
+
+
+def test_local_embedding_provider_rejects_invalid_json_response(httpx_mock) -> None:
+    httpx_mock.add_response(
+        method="POST",
+        url="http://localhost:9000/v1/embeddings",
+        text="{not json",
+    )
+    provider = LocalApiEmbeddingProvider("http://localhost:9000", "/v1/embeddings", "", "embo-01", 3, 32)
+
+    with pytest.raises(NonRetryableIngestionError, match="valid JSON"):
+        provider.embed_texts(["alpha"])
+
+
+def test_local_embedding_provider_rejects_non_positive_dimension() -> None:
+    with pytest.raises(ValueError, match="dimension"):
+        LocalApiEmbeddingProvider("http://localhost:9000", "/v1/embeddings", "", "embo-01", 0, 32)
+
+
 def test_local_embedding_provider_rejects_missing_embeddings_shape(httpx_mock) -> None:
     httpx_mock.add_response(
         method="POST",

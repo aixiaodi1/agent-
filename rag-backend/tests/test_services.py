@@ -677,6 +677,7 @@ def test_ingestion_service_writes_chroma_ids_and_metadata(tmp_path: Path) -> Non
 
     call = vector_store.calls[0]
     assert call["ids"] == [f"{document.id}:0", f"{document.id}:1"]
+    assert "source_path" not in call["metadatas"][0]
     assert call["metadatas"] == [
         {
             "document_id": document.id,
@@ -686,7 +687,6 @@ def test_ingestion_service_writes_chroma_ids_and_metadata(tmp_path: Path) -> Non
             "chunk_index": 0,
             "upload_time": document.created_at,
             "source": "upload",
-            "source_path": str(tmp_path / "guide.md"),
             "content_hash": "hash123",
         },
         {
@@ -697,7 +697,6 @@ def test_ingestion_service_writes_chroma_ids_and_metadata(tmp_path: Path) -> Non
             "chunk_index": 1,
             "upload_time": document.created_at,
             "source": "upload",
-            "source_path": str(tmp_path / "guide.md"),
             "content_hash": "hash123",
         },
     ]
@@ -986,3 +985,39 @@ def test_ingestion_service_marks_retry_exhausted_failed() -> None:
     assert stored_job.error == "retries exhausted"
     assert stored_document.status == DocumentStatus.FAILED
     assert stored_document.error == "retries exhausted"
+
+
+def test_ingestion_service_sanitizes_retry_exhausted_error_before_persisting() -> None:
+    repository = FakeRepository()
+    document = repository.create_document(
+        filename="retry.txt",
+        collection="docs",
+        mime_type="text/plain",
+        file_size=1,
+        source_path="/tmp/retry.txt",
+        content_hash="hash123",
+    )
+    job = repository.create_job(document.id, "docs")
+    service = IngestionService(
+        repository=repository,
+        job_service=JobService(repository),
+        parser=FakeParser("parsed text"),
+        chunker=FakeChunker(),
+        embedding_provider=FakeEmbeddingProvider(),
+        vector_store=FakeVectorStore(),
+    )
+
+    service.mark_retry_exhausted(
+        job.id,
+        document.id,
+        "failed at C:/secrets/private.db Authorization: Bearer sk-secret-token token=abc123",
+    )
+
+    stored_job = repository.get_job(job.id)
+    stored_document = repository.get_document(document.id)
+    assert stored_job.status == JobStatus.FAILED
+    assert stored_document.status == DocumentStatus.FAILED
+    assert stored_job.error == stored_document.error
+    assert "private.db" not in stored_job.error
+    assert "sk-secret-token" not in stored_job.error
+    assert "abc123" not in stored_job.error

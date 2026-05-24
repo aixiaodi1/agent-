@@ -6,6 +6,7 @@ from rq import get_current_job
 from app.dependencies import get_ingestion_service, get_job_service
 from app.domain import JobStatus
 from app.errors import NonRetryableIngestionError
+from app.sanitization import sanitize_error_message
 
 logger = logging.getLogger(__name__)
 
@@ -46,7 +47,7 @@ def ingest_document_job(document_id: str, collection: str) -> None:
             rq_job.id,
         )
         if rq_retry_is_exhausted(rq_job):
-            ingestion_service.mark_retry_exhausted(app_job.id, document_id, str(exc))
+            ingestion_service.mark_retry_exhausted(app_job.id, document_id, sanitize_error_message(str(exc)))
         raise
 
 

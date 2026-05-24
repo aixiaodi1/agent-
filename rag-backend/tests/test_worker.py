@@ -113,6 +113,29 @@ def test_ingest_document_job_marks_retry_exhausted_when_rq_reports_no_retries_le
     )
 
 
+def test_ingest_document_job_redacts_retry_exhausted_error_before_persisting() -> None:
+    rq_job = FakeRqJob(retries_left=0)
+    app_job = FakeAppJob(id="job_123", document_id="doc_123", collection="docs")
+    job_service = Mock()
+    job_service.get_job_by_rq_id.return_value = app_job
+    ingestion_service = Mock()
+    ingestion_service.ingest_document.side_effect = RuntimeError(
+        "failed at C:/secrets/private.db Authorization: Bearer sk-secret-token"
+    )
+
+    with (
+        patch("app.workers.ingest_worker.get_current_job", return_value=rq_job),
+        patch("app.workers.ingest_worker.get_job_service", return_value=job_service),
+        patch("app.workers.ingest_worker.get_ingestion_service", return_value=ingestion_service),
+    ):
+        with pytest.raises(RuntimeError, match="failed"):
+            ingest_document_job("doc_123", "docs")
+
+    persisted_error = ingestion_service.mark_retry_exhausted.call_args.args[2]
+    assert "private.db" not in persisted_error
+    assert "sk-secret-token" not in persisted_error
+
+
 def test_ingest_document_job_consumes_nonretryable_ingestion_errors() -> None:
     rq_job = FakeRqJob(retries_left=2)
     app_job = FakeAppJob(id="job_123", document_id="doc_123", collection="docs")

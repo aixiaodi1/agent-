@@ -103,6 +103,17 @@ def test_chroma_store_lists_legacy_string_collection_names_sorted() -> None:
         (["doc_1:0", "doc_1:0"], ["hello", "again"], [[0.1], [0.2]], [{"source_file": "guide.md"}, {"source_file": "guide.md"}], "duplicate"),
         (["doc_1:0"], ["hello"], [[0.1]], ["guide.md"], "metadata"),
         (["doc_1:0"], ["hello"], [(0.1, 0.2)], [{"source_file": "guide.md"}], "embedding"),
+        (["doc_1:0"], ["hello"], [[]], [{"source_file": "guide.md"}], "embedding"),
+        (
+            ["doc_1:0", "doc_1:1"],
+            ["hello", "again"],
+            [[0.1, 0.2], [0.3]],
+            [{"source_file": "guide.md"}, {"source_file": "guide.md"}],
+            "same dimensions",
+        ),
+        (["doc_1:0"], ["hello"], [[0.1, "0.2"]], [{"source_file": "guide.md"}], "finite numeric"),
+        (["doc_1:0"], ["hello"], [[0.1, True]], [{"source_file": "guide.md"}], "finite numeric"),
+        (["doc_1:0"], ["hello"], [[0.1, float("nan")]], [{"source_file": "guide.md"}], "finite numeric"),
     ],
 )
 def test_chroma_store_rejects_deterministic_input_errors_before_write(

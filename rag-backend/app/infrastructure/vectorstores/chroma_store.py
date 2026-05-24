@@ -1,9 +1,10 @@
-import re
+from math import isfinite
 from pathlib import Path
 
 import chromadb
 
 from app.errors import NonRetryableIngestionError, RetryableIngestionError
+from app.sanitization import sanitize_error_message
 
 
 class ChromaVectorStore:
@@ -58,11 +59,25 @@ class ChromaVectorStore:
         if any(not isinstance(embedding, list) for embedding in embeddings):
             raise NonRetryableIngestionError("Chroma chunk embedding entries must be lists.")
 
+        dimension = len(embeddings[0])
+        if dimension == 0:
+            raise NonRetryableIngestionError("Chroma chunk embedding entries must be non-empty lists.")
+
+        if any(len(embedding) != dimension for embedding in embeddings):
+            raise NonRetryableIngestionError("Chroma chunk embeddings must have the same dimensions.")
+
+        if any(
+            isinstance(value, bool) or not isinstance(value, int | float) or not isfinite(float(value))
+            for embedding in embeddings
+            for value in embedding
+        ):
+            raise NonRetryableIngestionError("Chroma chunk embedding values must be finite numeric values.")
+
         try:
             target = self.client.get_or_create_collection(collection)
             target.upsert(ids=ids, embeddings=embeddings, documents=texts, metadatas=metadatas)
         except Exception as exc:
-            raise RetryableIngestionError(f"Chroma write failed: {_sanitize_error_message(str(exc))}") from exc
+            raise RetryableIngestionError(f"Chroma write failed: {sanitize_error_message(str(exc))}") from exc
 
     def add_chunks(
         self,
@@ -73,23 +88,3 @@ class ChromaVectorStore:
         metadatas: list[dict],
     ) -> None:
         self.upsert_chunks(collection, ids, texts, embeddings, metadatas)
-
-
-def _sanitize_error_message(message: str) -> str:
-    if not message:
-        return "unknown error"
-
-    sanitized = re.sub(r"[A-Za-z]:[\\/][^\s]+", "<path>", message)
-    sanitized = re.sub(r"(?<!\w)/(?:[^\s/]+/)+[^\s]+", "<path>", sanitized)
-    sanitized = re.sub(
-        r"(?i)\bauthorization\s*[:=]\s*bearer\s+[^'\"\s]+",
-        "authorization=<redacted>",
-        sanitized,
-    )
-    sanitized = re.sub(r"(?i)bearer\s+[A-Za-z0-9._~+/=-]+", "Bearer <redacted>", sanitized)
-    sanitized = re.sub(
-        r"(?i)\b(api[_-]?key|token|secret|authorization)\s*[:=]\s*['\"]?[^'\"\s]+",
-        r"\1=<redacted>",
-        sanitized,
-    )
-    return sanitized

@@ -1,4 +1,3 @@
-import re
 from pathlib import Path
 
 from app.domain import JobStage
@@ -8,6 +7,7 @@ from app.infrastructure.embeddings.base import EmbeddingProvider
 from app.infrastructure.parsers.base import DocumentParser
 from app.infrastructure.repositories.base import Repository
 from app.infrastructure.vectorstores.base import VectorStore
+from app.sanitization import sanitize_error_message
 from app.services.job_service import JobService
 
 
@@ -44,7 +44,7 @@ class IngestionService:
             try:
                 text_path.write_text(parsed_text, encoding="utf-8")
             except OSError as exc:
-                raise RetryableIngestionError(f"Writing extracted text failed: {_sanitize_error_message(str(exc))}") from exc
+                raise RetryableIngestionError(f"Writing extracted text failed: {sanitize_error_message(str(exc))}") from exc
             self.repository.set_document_text_path(document_id, str(text_path))
 
             self.job_service.update_progress(job_id, JobStage.CHUNKING, 35)
@@ -53,7 +53,7 @@ class IngestionService:
             except (NonRetryableIngestionError, RetryableIngestionError):
                 raise
             except ValueError as exc:
-                detail = _sanitize_error_message(str(exc))
+                detail = sanitize_error_message(str(exc))
                 raise NonRetryableIngestionError(f"Document chunking failed: {detail}") from exc
 
             texts = [chunk.text for chunk in chunks]
@@ -70,7 +70,6 @@ class IngestionService:
                     "chunk_index": chunk.chunk_index,
                     "upload_time": document.created_at,
                     "source": "upload",
-                    "source_path": document.source_path,
                     "content_hash": document.content_hash,
                 }
                 for chunk in chunks
@@ -102,34 +101,27 @@ class IngestionService:
             self.repository.mark_document_indexed(document_id, chunk_count=len(chunks))
             self.job_service.mark_succeeded(job_id)
         except NonRetryableIngestionError as exc:
-            error = str(exc)
+            error = sanitize_error_message(str(exc))
             self.repository.mark_document_failed(document_id, error)
             self.job_service.mark_failed(job_id, error)
             raise
         except RetryableIngestionError as exc:
+            error = sanitize_error_message(str(exc))
             current = self.repository.get_job(job_id)
             self.repository.update_job(
                 job_id=job_id,
                 status=current.status,
                 stage=current.stage,
                 progress=current.progress,
-                error=str(exc),
+                error=error,
             )
             raise
 
     def mark_retry_exhausted(self, job_id: str, document_id: str, error: str) -> None:
-        self.repository.mark_document_failed(document_id, error)
-        self.job_service.mark_failed(job_id, error)
+        sanitized_error = sanitize_error_message(error)
+        self.repository.mark_document_failed(document_id, sanitized_error)
+        self.job_service.mark_failed(job_id, sanitized_error)
 
 
 def ingest_document(job_id: str, document_id: str, collection: str) -> None:
     raise RuntimeError("Configure a worker entrypoint with concrete ingestion dependencies.")
-
-
-def _sanitize_error_message(message: str) -> str:
-    if not message:
-        return "unknown error"
-
-    sanitized = re.sub(r"[A-Za-z]:[\\/][^\s]+", "<path>", message)
-    sanitized = re.sub(r"(?<!\w)/(?:[^\s/]+/)+[^\s]+", "<path>", sanitized)
-    return sanitized

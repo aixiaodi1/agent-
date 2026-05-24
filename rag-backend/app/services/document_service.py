@@ -1,5 +1,6 @@
 import inspect
 import shutil
+from dataclasses import dataclass
 from hashlib import sha256
 from pathlib import Path
 
@@ -8,6 +9,16 @@ from app.errors import ValidationError
 from app.infrastructure.queue.base import QueueClient
 from app.infrastructure.repositories.base import Repository
 from app.services.job_service import JobService
+
+
+@dataclass(frozen=True)
+class _ValidatedUpload:
+    filename: str
+    extension: str
+    content: bytes
+    content_type: str
+    content_hash: str
+    file_size: int
 
 
 class DocumentService:
@@ -34,31 +45,44 @@ class DocumentService:
         if not normalized_collection:
             raise ValidationError("Collection is required.")
 
-        documents = []
-        jobs = []
+        validated_uploads = []
         for upload in files:
             content = await self._read_file(upload)
             filename = Path(upload.filename).name
             extension = Path(filename).suffix.lower()
             self._validate_extension(extension)
-            self._validate_size(len(content))
+            file_size = len(content)
+            self._validate_size(file_size)
 
-            content_hash = sha256(content).hexdigest()
-            placeholder_path = self.settings.upload_dir / "_pending" / filename
-            document = self.repository.create_document(
-                filename=filename,
-                collection=normalized_collection,
-                mime_type=getattr(upload, "content_type", "") or "application/octet-stream",
-                file_size=len(content),
-                source_path=str(placeholder_path),
-                content_hash=content_hash,
+            validated_uploads.append(
+                _ValidatedUpload(
+                    filename=filename,
+                    extension=extension,
+                    content=content,
+                    content_type=getattr(upload, "content_type", "") or "application/octet-stream",
+                    content_hash=sha256(content).hexdigest(),
+                    file_size=file_size,
+                )
             )
 
-            final_path = self.settings.upload_dir / document.id / f"original{extension}"
+        documents = []
+        jobs = []
+        for upload in validated_uploads:
+            placeholder_path = self.settings.upload_dir / "_pending" / upload.filename
+            document = self.repository.create_document(
+                filename=upload.filename,
+                collection=normalized_collection,
+                mime_type=upload.content_type,
+                file_size=upload.file_size,
+                source_path=str(placeholder_path),
+                content_hash=upload.content_hash,
+            )
+
+            final_path = self.settings.upload_dir / document.id / f"original{upload.extension}"
             job = None
             try:
                 final_path.parent.mkdir(parents=True, exist_ok=True)
-                final_path.write_bytes(content)
+                final_path.write_bytes(upload.content)
                 document = self.repository.update_document_source_path(document.id, str(final_path))
 
                 job = self.job_service.create_job(document.id, normalized_collection)

@@ -1,5 +1,3 @@
-from dataclasses import asdict
-
 from fastapi import APIRouter, Depends, File, Form, HTTPException, UploadFile, status
 
 from app.dependencies import get_document_service, get_repository
@@ -13,16 +11,33 @@ router = APIRouter(prefix="/documents", tags=["documents"])
 
 
 def serialize_document(document: DocumentRecord) -> dict:
-    data = asdict(document)
-    data["status"] = document.status.value
-    return data
+    return {
+        "document_id": document.id,
+        "filename": document.filename,
+        "collection": document.collection,
+        "status": document.status.value,
+        "mime_type": document.mime_type,
+        "file_size": document.file_size,
+        "chunk_count": document.chunk_count,
+        "error": document.error,
+        "created_at": document.created_at,
+        "indexed_at": document.indexed_at,
+    }
 
 
 def serialize_job(job: JobRecord) -> dict:
-    data = asdict(job)
-    data["status"] = job.status.value
-    data["stage"] = job.stage.value
-    return data
+    return {
+        "job_id": job.id,
+        "document_id": job.document_id,
+        "status": job.status.value,
+        "stage": job.stage.value,
+        "progress": job.progress,
+        "error": job.error,
+        "created_at": job.created_at,
+        "updated_at": job.updated_at,
+        "started_at": job.started_at,
+        "finished_at": job.finished_at,
+    }
 
 
 @router.post("/upload")

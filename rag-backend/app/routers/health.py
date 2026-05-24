@@ -1,12 +1,10 @@
 from collections.abc import Callable
 
-from fastapi import APIRouter, Depends
+from fastapi import APIRouter, Request
 
 from app.dependencies import get_embedder, get_queue_client, get_repository, get_vector_store
 from app.infrastructure.embeddings.base import EmbeddingProvider
 from app.infrastructure.queue.base import QueueClient
-from app.infrastructure.repositories.base import Repository
-from app.infrastructure.vectorstores.base import VectorStore
 
 
 router = APIRouter(tags=["health"])
@@ -18,6 +16,11 @@ def _run_check(check: Callable[[], object]) -> dict:
     except Exception:
         return {"status": "error", "error": "check_failed"}
     return {"status": "ok"}
+
+
+def _resolve(request: Request, dependency: Callable[[], object]) -> object:
+    provider = request.app.dependency_overrides.get(dependency, dependency)
+    return provider()
 
 
 def _check_redis(queue_client: QueueClient) -> None:
@@ -36,18 +39,13 @@ def _check_embedding_provider(embedder: EmbeddingProvider) -> None:
 
 
 @router.get("/health")
-def health(
-    repository: Repository = Depends(get_repository),
-    queue_client: QueueClient = Depends(get_queue_client),
-    vector_store: VectorStore = Depends(get_vector_store),
-    embedder: EmbeddingProvider = Depends(get_embedder),
-) -> dict:
+def health(request: Request) -> dict:
     checks = {
         "api": {"status": "ok"},
-        "redis": _run_check(lambda: _check_redis(queue_client)),
-        "chroma": _run_check(lambda: vector_store.list_collections()),
-        "embedding_api": _run_check(lambda: _check_embedding_provider(embedder)),
-        "sqlite": _run_check(repository.initialize),
+        "redis": _run_check(lambda: _check_redis(_resolve(request, get_queue_client))),
+        "chroma": _run_check(lambda: _resolve(request, get_vector_store).list_collections()),
+        "embedding_api": _run_check(lambda: _check_embedding_provider(_resolve(request, get_embedder))),
+        "sqlite": _run_check(lambda: _resolve(request, get_repository).initialize()),
     }
     overall_status = "ok" if all(check["status"] == "ok" for check in checks.values()) else "degraded"
     return {"status": overall_status, "checks": checks}

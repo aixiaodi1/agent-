@@ -380,6 +380,33 @@ def test_document_service_upload_validation_failures(
     assert queue.enqueued == []
 
 
+def test_document_service_validates_entire_batch_before_side_effects(tmp_path: Path) -> None:
+    repository = FakeRepository()
+    queue = FakeQueue()
+    service = DocumentService(
+        repository=repository,
+        job_service=JobService(repository),
+        queue_client=queue,
+        settings=Settings(upload_dir=tmp_path, allowed_extensions=[".txt"], max_upload_mb=1),
+    )
+
+    with pytest.raises(ValidationError, match="Unsupported file extension"):
+        asyncio.run(
+            service.upload_files(
+                [
+                    FakeUploadFile("valid.txt", b"first file"),
+                    FakeUploadFile("bad.exe", b"second file"),
+                ],
+                "docs",
+            )
+        )
+
+    assert repository.documents == {}
+    assert repository.jobs == {}
+    assert queue.enqueued == []
+    assert list(tmp_path.iterdir()) == []
+
+
 def test_job_service_reads_and_attaches_jobs_by_public_repository_methods() -> None:
     repository = FakeRepository()
     document = repository.create_document(

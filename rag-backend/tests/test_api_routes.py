@@ -1,5 +1,3 @@
-from dataclasses import asdict
-
 from fastapi.testclient import TestClient
 
 from app.dependencies import get_document_service, get_embedder, get_queue_client, get_repository, get_vector_store
@@ -140,6 +138,59 @@ def make_client(overrides: dict | None = None) -> TestClient:
     return TestClient(app)
 
 
+def expected_public_document(
+    document_id: str = "doc_1",
+    collection: str = "guides",
+    status: DocumentStatus = DocumentStatus.UPLOADED,
+) -> dict:
+    document = make_document(document_id, collection, status)
+    return {
+        "document_id": document.id,
+        "filename": document.filename,
+        "collection": document.collection,
+        "status": document.status.value,
+        "mime_type": document.mime_type,
+        "file_size": document.file_size,
+        "chunk_count": document.chunk_count,
+        "error": document.error,
+        "created_at": document.created_at,
+        "indexed_at": document.indexed_at,
+    }
+
+
+def expected_public_job(
+    status: JobStatus = JobStatus.RUNNING,
+    stage: JobStage = JobStage.EMBEDDING,
+    progress: int = 60,
+    error: str | None = None,
+) -> dict:
+    job = make_job(status=status, stage=stage, progress=progress, error=error)
+    return {
+        "job_id": job.id,
+        "document_id": job.document_id,
+        "status": job.status.value,
+        "stage": job.stage.value,
+        "progress": job.progress,
+        "error": job.error,
+        "created_at": job.created_at,
+        "updated_at": job.updated_at,
+        "started_at": job.started_at,
+        "finished_at": job.finished_at,
+    }
+
+
+def assert_no_internal_document_fields(payload: dict) -> None:
+    assert "id" not in payload
+    assert "source_path" not in payload
+    assert "text_path" not in payload
+    assert "content_hash" not in payload
+
+
+def assert_no_internal_job_fields(payload: dict) -> None:
+    assert "id" not in payload
+    assert "rq_job_id" not in payload
+
+
 def test_upload_txt_returns_documents_and_jobs() -> None:
     service = FakeDocumentService()
     client = make_client({get_document_service: lambda: service})
@@ -152,9 +203,11 @@ def test_upload_txt_returns_documents_and_jobs() -> None:
 
     assert response.status_code == 200
     assert response.json() == {
-        "documents": [{**asdict(make_document()), "status": "uploaded"}],
-        "jobs": [{**asdict(make_job(status=JobStatus.QUEUED, stage=JobStage.UPLOADED, progress=5)), "status": "queued", "stage": "uploaded"}],
+        "documents": [expected_public_document()],
+        "jobs": [expected_public_job(status=JobStatus.QUEUED, stage=JobStage.UPLOADED, progress=5)],
     }
+    assert_no_internal_document_fields(response.json()["documents"][0])
+    assert_no_internal_job_fields(response.json()["jobs"][0])
     assert service.uploaded is not None
     assert service.uploaded[1] == "guides"
 
@@ -224,8 +277,9 @@ def test_get_documents_returns_indexed_and_uploaded_documents_with_collection_fi
 
     assert response.status_code == 200
     assert response.json() == {
-        "documents": [{**asdict(make_document("doc_1", "guides", DocumentStatus.INDEXED)), "status": "indexed"}]
+        "documents": [expected_public_document("doc_1", "guides", DocumentStatus.INDEXED)]
     }
+    assert_no_internal_document_fields(response.json()["documents"][0])
 
 
 def test_get_collections_returns_chroma_collection_names() -> None:
@@ -301,6 +355,48 @@ def test_health_degraded_errors_do_not_leak_raw_exception_text() -> None:
     assert body["status"] == "degraded"
     assert body["checks"]["chroma"] == {"status": "error", "error": "check_failed"}
     assert "internal://fake-secret-host" not in response.text
+
+
+def test_health_degrades_when_dependency_constructor_raises_without_leaking_error() -> None:
+    app = create_app()
+
+    def raise_vector_store_constructor():
+        raise RuntimeError("chroma constructor failed at internal://fake-secret-host")
+
+    app.dependency_overrides[get_repository] = lambda: FakeRepository()
+    app.dependency_overrides[get_queue_client] = lambda: FakeQueueClient()
+    app.dependency_overrides[get_vector_store] = raise_vector_store_constructor
+    app.dependency_overrides[get_embedder] = lambda: FakeEmbedder()
+    client = TestClient(app, raise_server_exceptions=False)
+
+    response = client.get("/health")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "degraded"
+    assert body["checks"]["chroma"] == {"status": "error", "error": "check_failed"}
+    assert "internal://fake-secret-host" not in response.text
+
+
+def test_health_degrades_when_repository_constructor_raises_without_leaking_error() -> None:
+    app = create_app()
+
+    def raise_repository_constructor():
+        raise RuntimeError("sqlite constructor failed at file:///fake-secret-db")
+
+    app.dependency_overrides[get_repository] = raise_repository_constructor
+    app.dependency_overrides[get_queue_client] = lambda: FakeQueueClient()
+    app.dependency_overrides[get_vector_store] = lambda: FakeVectorStore()
+    app.dependency_overrides[get_embedder] = lambda: FakeEmbedder()
+    client = TestClient(app, raise_server_exceptions=False)
+
+    response = client.get("/health")
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["status"] == "degraded"
+    assert body["checks"]["sqlite"] == {"status": "error", "error": "check_failed"}
+    assert "file:///fake-secret-db" not in response.text
 
 
 def test_health_embedding_check_does_not_call_embed_texts() -> None:

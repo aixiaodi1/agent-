@@ -63,8 +63,9 @@ async function refreshDocuments() {
     }
 
     for (const documentRecord of documents) {
+      const documentId = documentRecord.document_id || documentRecord.id || "-";
       const title = `${documentRecord.filename} · ${documentRecord.status}`;
-      const meta = `ID: ${documentRecord.id} · Collection: ${documentRecord.collection} · 分块: ${documentRecord.chunk_count ?? 0}`;
+      const meta = `ID: ${documentId} · Collection: ${documentRecord.collection} · 分块: ${documentRecord.chunk_count ?? 0}`;
       documentList.append(item(title, meta, documentRecord.status));
     }
   } catch (error) {
@@ -120,7 +121,7 @@ uploadForm.addEventListener("submit", async (event) => {
     }
 
     for (const job of data.jobs || []) {
-      const jobId = job.id || job.job_id;
+      const jobId = job.job_id || job.id;
       renderJob({ ...job, job_id: jobId });
       pollJob(jobId);
     }

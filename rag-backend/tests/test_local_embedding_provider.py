@@ -112,6 +112,29 @@ def test_local_embedding_provider_rejects_data_item_missing_embedding(httpx_mock
         provider.embed_texts(["alpha"])
 
 
+@pytest.mark.parametrize(
+    "bad_value",
+    ["0.2", True, float("nan")],
+)
+def test_local_embedding_provider_rejects_non_finite_numeric_values(httpx_mock, bad_value) -> None:
+    if isinstance(bad_value, float) and bad_value != bad_value:
+        httpx_mock.add_response(
+            method="POST",
+            url="http://localhost:9000/v1/embeddings",
+            text='{"embeddings": [[0.1, NaN, 0.3]]}',
+        )
+    else:
+        httpx_mock.add_response(
+            method="POST",
+            url="http://localhost:9000/v1/embeddings",
+            json={"embeddings": [[0.1, bad_value, 0.3]]},
+        )
+    provider = LocalApiEmbeddingProvider("http://localhost:9000", "/v1/embeddings", "", "embo-01", 3, 32)
+
+    with pytest.raises(NonRetryableIngestionError, match="finite numeric"):
+        provider.embed_texts(["alpha"])
+
+
 def test_local_embedding_provider_batches_requests_and_normalizes_url(httpx_mock) -> None:
     httpx_mock.add_response(
         method="POST",

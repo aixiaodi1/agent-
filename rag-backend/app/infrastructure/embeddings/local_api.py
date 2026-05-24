@@ -1,3 +1,5 @@
+from math import isfinite
+
 import httpx
 
 from app.errors import NonRetryableIngestionError, RetryableIngestionError
@@ -92,6 +94,13 @@ class LocalApiEmbeddingProvider:
                 raise NonRetryableIngestionError("Embedding API returned a non-list embedding.")
             if len(vector) != self._dimension:
                 raise NonRetryableIngestionError("Embedding API returned an unexpected dimension.")
+            if any(
+                isinstance(value, bool)
+                or not isinstance(value, int | float)
+                or not isfinite(float(value))
+                for value in vector
+            ):
+                raise NonRetryableIngestionError("Embedding API returned a non-finite numeric value.")
             embeddings.append(vector)
 
         return embeddings

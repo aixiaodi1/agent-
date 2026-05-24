@@ -95,3 +95,20 @@ def get_ingestion_service() -> IngestionService:
         embedding_provider=get_embedder(),
         vector_store=get_vector_store(),
     )
+
+
+def close_cached_dependencies() -> None:
+    if get_vector_store.cache_info().currsize:
+        vector_store = get_vector_store()
+        close = getattr(vector_store, "close", None)
+        if callable(close):
+            close()
+
+    get_repository.cache_clear()
+    get_parser_registry.cache_clear()
+    get_chunker.cache_clear()
+    get_embedder.cache_clear()
+    get_vector_store.cache_clear()
+    get_queue_client.cache_clear()
+    if hasattr(get_config_settings, "cache_clear"):
+        get_config_settings.cache_clear()

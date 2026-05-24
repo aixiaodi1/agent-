@@ -29,6 +29,7 @@ class Settings(BaseSettings):
     chunk_size: int = 500
     chunk_overlap: int = 50
     max_upload_mb: int = 50
+    max_upload_batch_mb: int = 100
     allowed_extensions_raw: str = Field(default=".txt,.md,.pdf", alias="ALLOWED_EXTENSIONS")
 
     @model_validator(mode="before")

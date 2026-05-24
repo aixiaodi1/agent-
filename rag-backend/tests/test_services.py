@@ -157,6 +157,13 @@ class FailingQueue:
         raise RuntimeError("queue unavailable")
 
 
+class FailingOnSecondEnqueueQueue(FakeQueue):
+    def enqueue_ingestion(self, document_id: str, collection: str, app_job_id: str | None = None) -> str:
+        if len(self.enqueued) == 1:
+            raise RuntimeError("queue unavailable on second file")
+        return super().enqueue_ingestion(document_id, collection, app_job_id)
+
+
 class RepositoryAwareQueue:
     def __init__(self, repository: FakeRepository) -> None:
         self.repository = repository
@@ -344,6 +351,39 @@ def test_document_service_marks_failed_and_cleans_file_when_queue_fails(tmp_path
     assert not (tmp_path / document.id).exists()
 
 
+def test_document_service_compensates_entire_batch_when_later_enqueue_fails(tmp_path: Path) -> None:
+    repository = FakeRepository()
+    queue = FailingOnSecondEnqueueQueue()
+    service = DocumentService(
+        repository=repository,
+        job_service=JobService(repository),
+        queue_client=queue,
+        settings=Settings(upload_dir=tmp_path, allowed_extensions=[".txt"], max_upload_mb=1),
+    )
+
+    with pytest.raises(RuntimeError, match="queue unavailable on second file"):
+        asyncio.run(
+            service.upload_files(
+                [
+                    FakeUploadFile("first.txt", b"first file"),
+                    FakeUploadFile("second.txt", b"second file"),
+                ],
+                "docs",
+            )
+        )
+
+    assert queue.enqueued == [("doc_1", "docs")]
+    assert set(repository.documents) == {"doc_1", "doc_2"}
+    assert set(repository.jobs) == {"job_1", "job_2"}
+    for document in repository.documents.values():
+        assert document.status == DocumentStatus.FAILED
+        assert document.error == "queue unavailable on second file"
+        assert not (tmp_path / document.id).exists()
+    for job in repository.jobs.values():
+        assert job.status == JobStatus.FAILED
+        assert job.error == "queue unavailable on second file"
+
+
 @pytest.mark.parametrize(
     ("files", "collection", "settings", "message"),
     [
@@ -378,6 +418,38 @@ def test_document_service_upload_validation_failures(
     assert repository.documents == {}
     assert repository.jobs == {}
     assert queue.enqueued == []
+
+
+def test_document_service_rejects_batch_when_total_upload_size_exceeds_limit(tmp_path: Path) -> None:
+    repository = FakeRepository()
+    queue = FakeQueue()
+    service = DocumentService(
+        repository=repository,
+        job_service=JobService(repository),
+        queue_client=queue,
+        settings=Settings(
+            upload_dir=tmp_path,
+            allowed_extensions=[".txt"],
+            max_upload_mb=1,
+            max_upload_batch_mb=0,
+        ),
+    )
+
+    with pytest.raises(ValidationError, match="Uploaded batch exceeds 0 MB"):
+        asyncio.run(
+            service.upload_files(
+                [
+                    FakeUploadFile("first.txt", b"x"),
+                    FakeUploadFile("second.txt", b"y"),
+                ],
+                "docs",
+            )
+        )
+
+    assert repository.documents == {}
+    assert repository.jobs == {}
+    assert queue.enqueued == []
+    assert list(tmp_path.iterdir()) == []
 
 
 def test_document_service_validates_entire_batch_before_side_effects(tmp_path: Path) -> None:

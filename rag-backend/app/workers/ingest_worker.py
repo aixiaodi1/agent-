@@ -4,6 +4,7 @@ from typing import Any
 from rq import get_current_job
 
 from app.dependencies import get_ingestion_service, get_job_service
+from app.domain import JobStatus
 from app.errors import NonRetryableIngestionError
 
 logger = logging.getLogger(__name__)
@@ -16,6 +17,16 @@ def ingest_document_job(document_id: str, collection: str) -> None:
 
     job_service = get_job_service()
     app_job = job_service.get_job_by_rq_id(rq_job.id)
+    if app_job.status != JobStatus.QUEUED:
+        logger.info(
+            "Skipping ingestion for app job %s with status %s, document %s, RQ job %s",
+            app_job.id,
+            app_job.status,
+            document_id,
+            rq_job.id,
+        )
+        return
+
     ingestion_service = get_ingestion_service()
 
     try:

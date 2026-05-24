@@ -252,6 +252,11 @@ class ValueErrorParser:
         raise ValueError("bad pdf secret path C:/secrets/private.pdf")
 
 
+class NonRetryableParser:
+    def parse(self, path: Path) -> str:
+        raise NonRetryableIngestionError("Document parsing failed.")
+
+
 class FakeChunker:
     def split(self, text: str) -> list[TextChunk]:
         return [
@@ -820,7 +825,40 @@ def test_ingestion_service_marks_empty_parsed_text_failed_without_retry(tmp_path
     assert stored_document.error == stored_job.error
 
 
-def test_ingestion_service_marks_parser_value_error_failed_without_retry_and_sanitizes(tmp_path: Path) -> None:
+def test_ingestion_service_marks_parser_nonretryable_error_failed_without_retry(tmp_path: Path) -> None:
+    repository = FakeRepository()
+    document = repository.create_document(
+        filename="bad.pdf",
+        collection="docs",
+        mime_type="application/pdf",
+        file_size=1,
+        source_path=str(tmp_path / "bad.pdf"),
+        content_hash="hash123",
+    )
+    Path(document.source_path).write_bytes(b"not a pdf")
+    job = repository.create_job(document.id, "docs")
+    service = IngestionService(
+        repository=repository,
+        job_service=JobService(repository),
+        parser=NonRetryableParser(),
+        chunker=FakeChunker(),
+        embedding_provider=FakeEmbeddingProvider(),
+        vector_store=FakeVectorStore(),
+    )
+
+    with pytest.raises(NonRetryableIngestionError, match="Document parsing failed"):
+        service.ingest_document(job.id, document.id, "docs")
+
+    stored_job = repository.get_job(job.id)
+    stored_document = repository.get_document(document.id)
+    assert stored_job.status == JobStatus.FAILED
+    assert stored_job.stage == JobStage.PARSING
+    assert stored_job.error == "Document parsing failed."
+    assert stored_document.status == DocumentStatus.FAILED
+    assert stored_document.error == stored_job.error
+
+
+def test_ingestion_service_does_not_hide_generic_parser_value_error(tmp_path: Path) -> None:
     repository = FakeRepository()
     document = repository.create_document(
         filename="bad.pdf",
@@ -841,18 +879,16 @@ def test_ingestion_service_marks_parser_value_error_failed_without_retry_and_san
         vector_store=FakeVectorStore(),
     )
 
-    with pytest.raises(NonRetryableIngestionError, match="Document parsing failed"):
+    with pytest.raises(ValueError, match="bad pdf secret path"):
         service.ingest_document(job.id, document.id, "docs")
 
     stored_job = repository.get_job(job.id)
     stored_document = repository.get_document(document.id)
-    assert stored_job.status == JobStatus.FAILED
+    assert stored_job.status == JobStatus.RUNNING
     assert stored_job.stage == JobStage.PARSING
-    assert stored_job.error == "Document parsing failed."
-    assert stored_document.status == DocumentStatus.FAILED
-    assert stored_document.error == stored_job.error
-    assert "secret" not in stored_job.error
-    assert "private.pdf" not in stored_job.error
+    assert stored_job.error is None
+    assert stored_document.status == DocumentStatus.INDEXING
+    assert stored_document.error is None
 
 
 def test_ingestion_service_marks_chunker_value_error_failed_without_retry(tmp_path: Path) -> None:

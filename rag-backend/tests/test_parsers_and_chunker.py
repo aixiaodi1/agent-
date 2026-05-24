@@ -2,8 +2,11 @@ from pathlib import Path
 
 import pytest
 
+from app.errors import NonRetryableIngestionError
 from app.infrastructure.chunkers.recursive import RecursiveTextChunker
+from app.infrastructure.parsers.pdf_parser import PdfParser
 from app.infrastructure.parsers.registry import ParserRegistry
+from app.infrastructure.parsers.text_parser import TextParser
 
 
 def test_text_and_markdown_parsers_extract_text(tmp_path: Path) -> None:
@@ -24,6 +27,22 @@ def test_registry_rejects_unsupported_extension(tmp_path: Path) -> None:
 
     with pytest.raises(ValueError, match="Unsupported file extension"):
         ParserRegistry.default().parse(file_path)
+
+
+def test_text_parser_wraps_decode_errors_as_nonretryable(tmp_path: Path) -> None:
+    file_path = tmp_path / "bad.txt"
+    file_path.write_bytes(b"\xff\xfe\xfa")
+
+    with pytest.raises(NonRetryableIngestionError, match="Document decoding failed"):
+        TextParser().parse(file_path)
+
+
+def test_pdf_parser_wraps_invalid_pdf_as_nonretryable(tmp_path: Path) -> None:
+    file_path = tmp_path / "bad.pdf"
+    file_path.write_bytes(b"not a pdf")
+
+    with pytest.raises(NonRetryableIngestionError, match="PDF parsing failed"):
+        PdfParser().parse(file_path)
 
 
 def test_recursive_chunker_defaults_to_500_with_50_overlap() -> None:

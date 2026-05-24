@@ -98,6 +98,7 @@ def test_chroma_store_lists_legacy_string_collection_names_sorted() -> None:
 @pytest.mark.parametrize(
     ("ids", "texts", "embeddings", "metadatas", "match"),
     [
+        ([], [], [], [], "at least one"),
         (["doc_1:0"], ["hello"], [[0.1]], [{"source_file": "guide.md"}, {"source_file": "extra.md"}], "same length"),
         (["doc_1:0", "doc_1:0"], ["hello", "again"], [[0.1], [0.2]], [{"source_file": "guide.md"}, {"source_file": "guide.md"}], "duplicate"),
         (["doc_1:0"], ["hello"], [[0.1]], ["guide.md"], "metadata"),

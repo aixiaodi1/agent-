@@ -1,6 +1,8 @@
 import sqlite3
 from pathlib import Path
 
+import pytest
+
 from app.domain import DocumentStatus, JobStage, JobStatus
 from app.infrastructure.repositories import sqlite as sqlite_repository
 from app.infrastructure.repositories.sqlite import SQLiteRepository
@@ -134,6 +136,58 @@ def test_repository_replace_chunks_removes_stale_document_chunks(tmp_path: Path)
         (document.id, 0, f"{document.id}:0", "fresh only"),
         (other_document.id, 0, f"{other_document.id}:0", "other"),
     }
+
+
+def test_repository_replace_chunks_rolls_back_delete_when_insert_fails(tmp_path: Path) -> None:
+    database_path = tmp_path / "rag.sqlite"
+    repo = SQLiteRepository(f"sqlite:///{database_path}")
+    repo.initialize()
+    document = repo.create_document(
+        filename="guide.md",
+        collection="docs",
+        mime_type="text/markdown",
+        file_size=12,
+        source_path=str(tmp_path / "guide.md"),
+        content_hash="abc123",
+    )
+    repo.replace_chunks(
+        document_id=document.id,
+        collection="docs",
+        chunks=[
+            {
+                "chunk_index": 0,
+                "chroma_id": f"{document.id}:0",
+                "content_preview": "original",
+                "token_count": 1,
+                "source_file": "guide.md",
+                "upload_time": document.created_at,
+            }
+        ],
+    )
+
+    with pytest.raises(sqlite3.IntegrityError):
+        repo.replace_chunks(
+            document_id=document.id,
+            collection="docs",
+            chunks=[
+                {
+                    "chunk_index": 0,
+                    "chroma_id": f"{document.id}:0",
+                    "content_preview": None,
+                    "token_count": 1,
+                    "source_file": "guide.md",
+                    "upload_time": document.created_at,
+                }
+            ],
+        )
+
+    with sqlite3.connect(database_path) as connection:
+        rows = connection.execute(
+            "SELECT chroma_id, content_preview FROM chunks WHERE document_id = ?",
+            (document.id,),
+        ).fetchall()
+
+    assert rows == [(f"{document.id}:0", "original")]
 
 
 def test_repository_preserves_finished_at_after_terminal_update(

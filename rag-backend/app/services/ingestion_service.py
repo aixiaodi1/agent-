@@ -35,14 +35,7 @@ class IngestionService:
 
             self.repository.mark_document_indexing(document_id)
             self.job_service.mark_running(job_id, JobStage.PARSING, 20)
-            try:
-                parsed_text = self.parser.parse(source_path)
-            except (NonRetryableIngestionError, RetryableIngestionError):
-                raise
-            except Exception as exc:
-                if not _is_deterministic_parse_error(exc):
-                    raise
-                raise NonRetryableIngestionError("Document parsing failed.") from exc
+            parsed_text = self.parser.parse(source_path)
 
             if not parsed_text.strip():
                 raise NonRetryableIngestionError("Parsed document text is empty.")
@@ -131,15 +124,6 @@ class IngestionService:
 
 def ingest_document(job_id: str, document_id: str, collection: str) -> None:
     raise RuntimeError("Configure a worker entrypoint with concrete ingestion dependencies.")
-
-
-def _is_deterministic_parse_error(exc: Exception) -> bool:
-    if isinstance(exc, (ValueError, UnicodeDecodeError, EOFError)):
-        return True
-
-    exc_type = type(exc)
-    module = exc_type.__module__.lower()
-    return module.startswith("pypdf") or exc_type.__name__ in {"PdfReadError", "PdfStreamError"}
 
 
 def _sanitize_error_message(message: str) -> str:

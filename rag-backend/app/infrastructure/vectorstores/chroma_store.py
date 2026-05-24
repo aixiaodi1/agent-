@@ -46,6 +46,9 @@ class ChromaVectorStore:
         if len({len(ids), len(texts), len(embeddings), len(metadatas)}) != 1:
             raise NonRetryableIngestionError("Chroma chunk ids, texts, embeddings, and metadatas must have the same length.")
 
+        if not ids:
+            raise NonRetryableIngestionError("Chroma chunk upsert requires at least one chunk.")
+
         if len(ids) != len(set(ids)):
             raise NonRetryableIngestionError("Chroma chunk ids must not contain duplicate values.")
 
@@ -78,4 +81,10 @@ def _sanitize_error_message(message: str) -> str:
 
     sanitized = re.sub(r"[A-Za-z]:[\\/][^\s]+", "<path>", message)
     sanitized = re.sub(r"(?<!\w)/(?:[^\s/]+/)+[^\s]+", "<path>", sanitized)
+    sanitized = re.sub(
+        r"(?i)\b(api[_-]?key|token|secret|authorization)\s*[:=]\s*['\"]?[^'\"\s]+",
+        r"\1=<redacted>",
+        sanitized,
+    )
+    sanitized = re.sub(r"(?i)bearer\s+[A-Za-z0-9._~+/=-]+", "Bearer <redacted>", sanitized)
     return sanitized

@@ -6,9 +6,7 @@ BACKEND_DIR="$ROOT_DIR/rag-backend"
 API_PORT="${API_PORT:-8000}"
 ADMIN_URL="${ADMIN_URL:-http://localhost:${API_PORT}/admin}"
 HEALTH_URL="${HEALTH_URL:-http://localhost:${API_PORT}/health}"
-PYTHON_BIN="${PYTHON_BIN:-python}"
-UVICORN_BIN="${UVICORN_BIN:-uvicorn}"
-RQ_BIN="${RQ_BIN:-rq}"
+PYTHON_BIN="${RAG_PYTHON:-${PYTHON_BIN:-python}}"
 
 API_PID=""
 WORKER_PID=""
@@ -31,15 +29,43 @@ require_command() {
 }
 
 resolve_backend_commands() {
-  if [[ -x "$BACKEND_DIR/.venv/bin/python" ]]; then
+  if [[ -n "${RAG_PYTHON:-}" ]]; then
+    PYTHON_BIN="$RAG_PYTHON"
+  elif [[ -x "$BACKEND_DIR/.venv/bin/python" ]]; then
     PYTHON_BIN="$BACKEND_DIR/.venv/bin/python"
-    UVICORN_BIN="$BACKEND_DIR/.venv/bin/uvicorn"
-    RQ_BIN="$BACKEND_DIR/.venv/bin/rq"
   elif [[ -x "$BACKEND_DIR/.venv/Scripts/python.exe" ]]; then
     PYTHON_BIN="$BACKEND_DIR/.venv/Scripts/python.exe"
-    UVICORN_BIN="$BACKEND_DIR/.venv/Scripts/uvicorn.exe"
-    RQ_BIN="$BACKEND_DIR/.venv/Scripts/rq.exe"
   fi
+}
+
+verify_python_dependencies() {
+  "$PYTHON_BIN" - <<'PY'
+import importlib.util
+import sys
+
+modules = {
+    "chromadb": "chromadb",
+    "fastapi": "fastapi",
+    "httpx": "httpx",
+    "jinja2": "jinja2",
+    "pydantic-settings": "pydantic_settings",
+    "pypdf": "pypdf",
+    "python-multipart": "multipart",
+    "redis": "redis",
+    "rq": "rq",
+    "uvicorn": "uvicorn",
+}
+missing = [package for package, module in modules.items() if importlib.util.find_spec(module) is None]
+if missing:
+    print("Missing Python packages in:", sys.executable, file=sys.stderr)
+    for package in missing:
+        print(f"  - {package}", file=sys.stderr)
+    print('Install them with: python -m pip install -e "rag-backend[dev]"', file=sys.stderr)
+    print("Or reuse an existing RAG environment:", file=sys.stderr)
+    print("  RAG_PYTHON=/path/to/venv/bin/python ./start.sh", file=sys.stderr)
+    raise SystemExit(1)
+print("Using Python:", sys.executable)
+PY
 }
 
 load_env() {
@@ -129,8 +155,7 @@ main() {
 
   resolve_backend_commands
   require_command "$PYTHON_BIN"
-  require_command "$UVICORN_BIN"
-  require_command "$RQ_BIN"
+  verify_python_dependencies
 
   load_env
   start_redis
@@ -140,11 +165,11 @@ main() {
   mkdir -p "${UPLOAD_DIR:-./data/uploads}" "${CHROMA_PERSIST_DIR:-./data/chroma}" ./data
 
   echo "Starting FastAPI on port $API_PORT..."
-  "$UVICORN_BIN" app.main:app --reload --port "$API_PORT" &
+  "$PYTHON_BIN" -m uvicorn app.main:app --reload --port "$API_PORT" &
   API_PID="$!"
 
   echo "Starting RQ worker for queue ${RQ_QUEUE_NAME:-rag-ingestion}..."
-  "$RQ_BIN" worker "${RQ_QUEUE_NAME:-rag-ingestion}" --url "${REDIS_URL:-redis://localhost:6379/0}" &
+  "$PYTHON_BIN" -m rq worker "${RQ_QUEUE_NAME:-rag-ingestion}" --url "${REDIS_URL:-redis://localhost:6379/0}" &
   WORKER_PID="$!"
 
   wait_for_health

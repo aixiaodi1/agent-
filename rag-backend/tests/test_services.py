@@ -154,8 +154,30 @@ class FakeUploadFile:
         self.content_type = content_type
         self._content = content
 
-    async def read(self) -> bytes:
-        return self._content
+    async def read(self, size: int = -1) -> bytes:
+        if size is None or size < 0:
+            content, self._content = self._content, b""
+            return content
+        content = self._content[:size]
+        self._content = self._content[size:]
+        return content
+
+
+class OversizedStreamingUploadFile:
+    def __init__(self) -> None:
+        self.filename = "huge.txt"
+        self.content_type = "text/plain"
+        self.read_sizes: list[int] = []
+        self._remaining_reads = 2
+
+    async def read(self, size: int = -1) -> bytes:
+        if size is None or size < 0:
+            raise AssertionError("upload should be read with bounded chunk sizes")
+        self.read_sizes.append(size)
+        if self._remaining_reads <= 0:
+            return b""
+        self._remaining_reads -= 1
+        return b"x"
 
 
 class FakeQueue:
@@ -185,6 +207,14 @@ class FailingQueue:
 
     def enqueue_ingestions(self, items: list[IngestionQueueItem]) -> list[str]:
         raise RuntimeError("queue unavailable")
+
+
+class SecretFailingQueue:
+    def enqueue_ingestion(self, document_id: str, collection: str, app_job_id: str | None = None) -> str:
+        raise RuntimeError("queue failed at C:/redis/private.rdb Authorization: Bearer sk-secret-token")
+
+    def enqueue_ingestions(self, items: list[IngestionQueueItem]) -> list[str]:
+        raise RuntimeError("queue failed at C:/redis/private.rdb Authorization: Bearer sk-secret-token")
 
 
 class FailingBatchQueue(FakeQueue):
@@ -429,6 +459,28 @@ def test_document_service_marks_failed_and_cleans_file_when_queue_fails(tmp_path
     assert not (tmp_path / document.id).exists()
 
 
+def test_document_service_sanitizes_queue_failure_before_compensation(tmp_path: Path) -> None:
+    repository = FakeRepository()
+    service = DocumentService(
+        repository=repository,
+        job_service=JobService(repository),
+        queue_client=SecretFailingQueue(),
+        settings=Settings(upload_dir=tmp_path, allowed_extensions=[".txt"], max_upload_mb=1),
+    )
+
+    with pytest.raises(RuntimeError, match="queue failed"):
+        asyncio.run(service.upload_files([FakeUploadFile("Guide.TXT", b"hello rag")], "docs"))
+
+    document = repository.get_document("doc_1")
+    job = repository.get_job("job_1")
+    assert document.status == DocumentStatus.FAILED
+    assert job.status == JobStatus.FAILED
+    assert document.error == job.error
+    assert "private.rdb" not in document.error
+    assert "sk-secret-token" not in document.error
+    assert not (tmp_path / document.id).exists()
+
+
 def test_document_service_batch_enqueues_only_after_all_documents_and_jobs_are_prepared(tmp_path: Path) -> None:
     repository = FakeRepository()
     queue = BatchOrderCapturingQueue(repository)
@@ -564,6 +616,28 @@ def test_document_service_rejects_batch_when_total_upload_size_exceeds_limit(tmp
             )
         )
 
+    assert repository.documents == {}
+    assert repository.jobs == {}
+    assert queue.enqueued == []
+    assert list(tmp_path.iterdir()) == []
+
+
+def test_document_service_rejects_oversized_upload_without_unbounded_read(tmp_path: Path) -> None:
+    repository = FakeRepository()
+    queue = FakeQueue()
+    upload = OversizedStreamingUploadFile()
+    service = DocumentService(
+        repository=repository,
+        job_service=JobService(repository),
+        queue_client=queue,
+        settings=Settings(upload_dir=tmp_path, allowed_extensions=[".txt"], max_upload_mb=0, max_upload_batch_mb=1),
+    )
+
+    with pytest.raises(ValidationError, match="exceeds 0 MB"):
+        asyncio.run(service.upload_files([upload], "docs"))
+
+    assert upload.read_sizes
+    assert all(size > 0 for size in upload.read_sizes)
     assert repository.documents == {}
     assert repository.jobs == {}
     assert queue.enqueued == []

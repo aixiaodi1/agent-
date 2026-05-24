@@ -8,7 +8,11 @@ from app.config import Settings
 from app.errors import ValidationError
 from app.infrastructure.queue.base import IngestionQueueItem, QueueClient
 from app.infrastructure.repositories.base import Repository
+from app.sanitization import sanitize_error_message
 from app.services.job_service import JobService
+
+
+_UPLOAD_READ_CHUNK_BYTES = 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -48,14 +52,10 @@ class DocumentService:
         validated_uploads = []
         total_upload_size = 0
         for upload in files:
-            content = await self._read_file(upload)
             filename = Path(upload.filename).name
             extension = Path(filename).suffix.lower()
             self._validate_extension(extension)
-            file_size = len(content)
-            self._validate_size(file_size)
-            total_upload_size += file_size
-            self._validate_batch_size(total_upload_size)
+            content, file_size, content_hash, total_upload_size = await self._read_file(upload, total_upload_size)
 
             validated_uploads.append(
                 _ValidatedUpload(
@@ -63,7 +63,7 @@ class DocumentService:
                     extension=extension,
                     content=content,
                     content_type=getattr(upload, "content_type", "") or "application/octet-stream",
-                    content_hash=sha256(content).hexdigest(),
+                    content_hash=content_hash,
                     file_size=file_size,
                 )
             )
@@ -114,19 +114,34 @@ class DocumentService:
                 if str(rq_job_id) != jobs[index].rq_job_id:
                     jobs[index] = self.job_service.attach_rq_job(jobs[index].id, str(rq_job_id))
         except Exception as exc:
-            error = str(exc)
+            error = sanitize_error_message(str(exc))
             self._compensate_batch_best_effort(created_document_ids, created_job_ids, saved_upload_dirs, error)
             raise
 
         return {"documents": documents, "jobs": jobs}
 
-    async def _read_file(self, upload) -> bytes:
-        content = upload.read()
-        if inspect.isawaitable(content):
-            content = await content
-        if not isinstance(content, bytes):
-            raise ValidationError("Uploaded file content must be bytes.")
-        return content
+    async def _read_file(self, upload, current_batch_size: int) -> tuple[bytes, int, str, int]:
+        chunks: list[bytes] = []
+        digest = sha256()
+        file_size = 0
+
+        while True:
+            chunk = upload.read(_UPLOAD_READ_CHUNK_BYTES)
+            if inspect.isawaitable(chunk):
+                chunk = await chunk
+            if not isinstance(chunk, bytes):
+                raise ValidationError("Uploaded file content must be bytes.")
+            if not chunk:
+                break
+
+            chunks.append(chunk)
+            digest.update(chunk)
+            file_size += len(chunk)
+            current_batch_size += len(chunk)
+            self._validate_size(file_size)
+            self._validate_batch_size(current_batch_size)
+
+        return b"".join(chunks), file_size, digest.hexdigest(), current_batch_size
 
     def _validate_extension(self, extension: str) -> None:
         if extension not in self.settings.allowed_extensions:

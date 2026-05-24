@@ -3,6 +3,7 @@ from math import isfinite
 import httpx
 
 from app.errors import NonRetryableIngestionError, RetryableIngestionError
+from app.sanitization import sanitize_error_message
 
 
 class LocalApiEmbeddingProvider:
@@ -49,6 +50,16 @@ class LocalApiEmbeddingProvider:
                 timeout=60.0,
             )
             response.raise_for_status()
+        except httpx.HTTPStatusError as exc:
+            status_code = exc.response.status_code
+            if status_code == 429 or status_code >= 500:
+                raise RetryableIngestionError("Embedding API request failed.") from exc
+
+            detail = sanitize_error_message(exc.response.text).strip()
+            suffix = f": {detail}" if detail else "."
+            raise NonRetryableIngestionError(
+                f"Embedding API returned non-retryable HTTP {status_code}{suffix}"
+            ) from exc
         except httpx.HTTPError as exc:
             raise RetryableIngestionError("Embedding API request failed.") from exc
 

@@ -1,7 +1,7 @@
 import httpx
 import pytest
 
-from app.errors import NonRetryableIngestionError
+from app.errors import NonRetryableIngestionError, RetryableIngestionError
 from app.infrastructure.embeddings.local_api import LocalApiEmbeddingProvider
 
 
@@ -80,6 +80,35 @@ def test_local_embedding_provider_rejects_invalid_json_response(httpx_mock) -> N
     provider = LocalApiEmbeddingProvider("http://localhost:9000", "/v1/embeddings", "", "embo-01", 3, 32)
 
     with pytest.raises(NonRetryableIngestionError, match="valid JSON"):
+        provider.embed_texts(["alpha"])
+
+
+def test_local_embedding_provider_treats_deterministic_4xx_as_nonretryable(httpx_mock) -> None:
+    httpx_mock.add_response(
+        method="POST",
+        url="http://localhost:9000/v1/embeddings",
+        status_code=401,
+        text="invalid api_key=sk-secret-token",
+    )
+    provider = LocalApiEmbeddingProvider("http://localhost:9000", "/v1/embeddings", "sk-secret-token", "embo-01", 3, 32)
+
+    with pytest.raises(NonRetryableIngestionError) as exc_info:
+        provider.embed_texts(["alpha"])
+
+    assert "sk-secret-token" not in str(exc_info.value)
+
+
+@pytest.mark.parametrize("status_code", [429, 500])
+def test_local_embedding_provider_treats_rate_limit_and_5xx_as_retryable(httpx_mock, status_code: int) -> None:
+    httpx_mock.add_response(
+        method="POST",
+        url="http://localhost:9000/v1/embeddings",
+        status_code=status_code,
+        text="temporarily unavailable",
+    )
+    provider = LocalApiEmbeddingProvider("http://localhost:9000", "/v1/embeddings", "", "embo-01", 3, 32)
+
+    with pytest.raises(RetryableIngestionError, match="Embedding API request failed"):
         provider.embed_texts(["alpha"])
 
 

@@ -12,17 +12,41 @@ python -m venv .venv
 python -m pip install -e ".[dev]"
 ```
 
+Local SentenceTransformers embeddings are optional because they can pull large
+Torch/model dependencies. If the selected Python environment does not already
+have them, either reuse your existing RAG environment with `RAG_PYTHON` or
+install them explicitly:
+
+```bash
+python -m pip install -e ".[local-embeddings]"
+```
+
 ## Environment
 
 Copy `.env.example` to `.env` and set:
 
 - `EMBEDDING_API_BASE_URL`
-- `EMBEDDING_API_KEY` or `MINIMAX_API_KEY`
+- `EMBEDDING_MODEL`
 - `CHROMA_PERSIST_DIR`
 - `REDIS_URL`
 - `RQ_QUEUE_NAME` if you change the default queue name
 
 Secrets stay in `.env`; `.env` is not committed.
+
+The default embedding mode is local SentenceTransformers through LangChain:
+
+```env
+EMBEDDING_PROVIDER=sentence-transformers
+EMBEDDING_MODEL=shibing624/text2vec-base-chinese
+```
+
+To use the HTTP Embedding API adapter instead, set:
+
+```env
+EMBEDDING_PROVIDER=api
+EMBEDDING_API_BASE_URL=http://localhost:9000
+EMBEDDING_API_KEY=
+```
 
 Make sure `CHROMA_PERSIST_DIR` points to a local directory that exists or can be created by the backend process, and that the process has permission to write there. The default local data directory is ignored by Git.
 
@@ -54,6 +78,7 @@ The script will:
 - use `rag-backend/.venv` automatically when it exists
 - reuse another RAG Python environment when `RAG_PYTHON` is set
 - install missing backend Python packages into the selected Python environment when needed
+- check local embedding packages without auto-installing heavy Torch/model dependencies
 - start FastAPI on `http://localhost:8000`
 - start the RQ worker with the configured `RQ_QUEUE_NAME` and `REDIS_URL`
 - open `http://localhost:8000/admin` in your browser
@@ -85,6 +110,16 @@ RAG_PYTHON="/mnt/f/Dev/Hermes/src/hermes-agent/venv/Scripts/python.exe" ./start.
 ```
 
 On Windows PowerShell, run the same script through WSL/Git Bash and convert the Windows path to a shell-readable path, for example `F:\Dev\Hermes\...` becomes `/mnt/f/Dev/Hermes/...` in WSL.
+
+If you really want `start.sh` to install the optional local embedding runtime,
+opt in explicitly:
+
+```bash
+AUTO_INSTALL_LOCAL_EMBEDDINGS=1 ./start.sh
+```
+
+This can download large Torch/model packages, so reusing your existing RAG
+environment is usually safer.
 
 ### Manual Start
 

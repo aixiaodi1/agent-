@@ -6,6 +6,7 @@ from app.infrastructure.chunkers.base import Chunker
 from app.infrastructure.chunkers.recursive import RecursiveTextChunker
 from app.infrastructure.embeddings.base import EmbeddingProvider
 from app.infrastructure.embeddings.local_api import LocalApiEmbeddingProvider
+from app.infrastructure.embeddings.sentence_transformers import SentenceTransformersEmbeddingProvider
 from app.infrastructure.parsers.base import DocumentParser
 from app.infrastructure.parsers.registry import ParserRegistry
 from app.infrastructure.queue.base import QueueClient
@@ -47,13 +48,22 @@ def get_chunker() -> Chunker:
 
 @lru_cache
 def get_embedder() -> EmbeddingProvider:
-    settings = get_settings()
-    return LocalApiEmbeddingProvider(
-        base_url=settings.embedding_api_base_url,
-        path=settings.embedding_api_path,
-        api_key=settings.embedding_api_key or settings.minimax_api_key,
-        model=settings.embedding_model,
-        dimension=settings.embedding_dimension,
+    return build_embedder(get_settings())
+
+
+def build_embedder(settings: Settings) -> EmbeddingProvider:
+    if settings.embedding_provider.lower() in {"api", "local-api", "http"}:
+        return LocalApiEmbeddingProvider(
+            base_url=settings.embedding_api_base_url,
+            path=settings.embedding_api_path,
+            api_key=settings.embedding_api_key or settings.minimax_api_key,
+            model=settings.embedding_model,
+            dimension=settings.embedding_dimension,
+            batch_size=settings.embedding_batch_size,
+        )
+
+    return SentenceTransformersEmbeddingProvider(
+        model_name=settings.embedding_model,
         batch_size=settings.embedding_batch_size,
     )
 

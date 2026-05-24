@@ -8,6 +8,7 @@ ADMIN_URL="${ADMIN_URL:-http://localhost:${API_PORT}/admin}"
 HEALTH_URL="${HEALTH_URL:-http://localhost:${API_PORT}/health}"
 PYTHON_BIN="${RAG_PYTHON:-${PYTHON_BIN:-python}}"
 AUTO_INSTALL_DEPS="${AUTO_INSTALL_DEPS:-1}"
+AUTO_INSTALL_LOCAL_EMBEDDINGS="${AUTO_INSTALL_LOCAL_EMBEDDINGS:-0}"
 
 API_PID=""
 WORKER_PID=""
@@ -64,6 +65,55 @@ if missing:
     raise SystemExit(1)
 print("Using Python:", sys.executable)
 PY
+}
+
+verify_local_embedding_dependencies() {
+  "$PYTHON_BIN" - <<'PY'
+import importlib.util
+import os
+import sys
+
+provider = os.getenv("EMBEDDING_PROVIDER", "sentence-transformers").lower()
+if provider not in {"sentence-transformers", "local", "local-model"}:
+    raise SystemExit(0)
+
+modules = {
+    "langchain-community": "langchain_community",
+    "sentence-transformers": "sentence_transformers",
+}
+missing = [package for package, module in modules.items() if importlib.util.find_spec(module) is None]
+if missing:
+    print("Missing local embedding packages in:", sys.executable, file=sys.stderr)
+    for package in missing:
+        print(f"  - {package}", file=sys.stderr)
+    print("These packages can pull large torch/model dependencies, so start.sh will not auto-install them.", file=sys.stderr)
+    print('Reuse your existing RAG environment with:', file=sys.stderr)
+    print('  RAG_PYTHON=/path/to/venv/bin/python ./start.sh', file=sys.stderr)
+    print('Or install the optional local embedding runtime manually with:', file=sys.stderr)
+    print('  cd rag-backend && python -m pip install -e ".[local-embeddings]"', file=sys.stderr)
+    print('Fallback option: set EMBEDDING_PROVIDER=api and EMBEDDING_API_BASE_URL=http://...', file=sys.stderr)
+    raise SystemExit(1)
+PY
+}
+
+ensure_local_embedding_dependencies() {
+  if verify_local_embedding_dependencies; then
+    return
+  fi
+
+  if [[ "$AUTO_INSTALL_LOCAL_EMBEDDINGS" != "1" ]]; then
+    exit 1
+  fi
+
+  echo "Installing optional local embedding dependencies into: $PYTHON_BIN"
+  echo "This may download large torch/model packages. Press Ctrl+C now to cancel."
+  sleep 5
+  (
+    cd "$BACKEND_DIR"
+    "$PYTHON_BIN" -m pip install -i https://pypi.tuna.tsinghua.edu.cn/simple -e ".[local-embeddings]"
+  )
+
+  verify_local_embedding_dependencies
 }
 
 ensure_python_dependencies() {
@@ -177,6 +227,7 @@ main() {
   ensure_python_dependencies
 
   load_env
+  ensure_local_embedding_dependencies
   start_redis
 
   cd "$BACKEND_DIR"

@@ -21,6 +21,10 @@ dev = [
   "pytest",
   "pytest-httpx"
 ]
+local-embeddings = [
+  "langchain-community",
+  "sentence-transformers"
+]
 
 [tool.setuptools.packages.find]
 include = ["app*"]

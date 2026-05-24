@@ -6,7 +6,7 @@ from pathlib import Path
 
 from app.config import Settings
 from app.errors import ValidationError
-from app.infrastructure.queue.base import QueueClient
+from app.infrastructure.queue.base import IngestionQueueItem, QueueClient
 from app.infrastructure.repositories.base import Repository
 from app.services.job_service import JobService
 
@@ -73,6 +73,7 @@ class DocumentService:
         created_document_ids = []
         created_job_ids = []
         saved_upload_dirs = []
+        queue_items = []
         try:
             for upload in validated_uploads:
                 placeholder_path = self.settings.upload_dir / "_pending" / upload.filename
@@ -95,17 +96,23 @@ class DocumentService:
                 job = self.job_service.create_job(document.id, normalized_collection)
                 created_job_ids.append(job.id)
                 job = self.job_service.attach_rq_job(job.id, job.id)
-                rq_job = self.queue_client.enqueue_ingestion(
-                    document.id,
-                    normalized_collection,
-                    app_job_id=job.id,
-                )
-                rq_job_id = getattr(rq_job, "id", rq_job)
-                if str(rq_job_id) != job.rq_job_id:
-                    job = self.job_service.attach_rq_job(job.id, str(rq_job_id))
 
                 documents.append(document)
                 jobs.append(job)
+                queue_items.append(
+                    IngestionQueueItem(
+                        document_id=document.id,
+                        collection=normalized_collection,
+                        app_job_id=job.id,
+                    )
+                )
+
+            rq_job_ids = self.queue_client.enqueue_ingestions(queue_items) if queue_items else []
+            if len(rq_job_ids) != len(jobs):
+                raise RuntimeError("Queue returned an unexpected number of jobs.")
+            for index, rq_job_id in enumerate(rq_job_ids):
+                if str(rq_job_id) != jobs[index].rq_job_id:
+                    jobs[index] = self.job_service.attach_rq_job(jobs[index].id, str(rq_job_id))
         except Exception as exc:
             error = str(exc)
             self._compensate_batch_best_effort(created_document_ids, created_job_ids, saved_upload_dirs, error)

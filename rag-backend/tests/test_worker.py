@@ -53,8 +53,8 @@ def test_ingest_document_job_loads_matching_app_job_and_ingests_document() -> No
     ingestion_service.ingest_document.assert_called_once_with("job_123", "doc_123", "docs")
 
 
-@pytest.mark.parametrize("status", [JobStatus.FAILED, JobStatus.RUNNING, JobStatus.SUCCEEDED])
-def test_ingest_document_job_skips_non_queued_app_jobs(status: JobStatus) -> None:
+@pytest.mark.parametrize("status", [JobStatus.FAILED, JobStatus.SUCCEEDED])
+def test_ingest_document_job_skips_terminal_app_jobs(status: JobStatus) -> None:
     rq_job = FakeRqJob()
     app_job = FakeAppJob(id="job_123", document_id="doc_123", collection="docs", status=status)
     job_service = Mock()
@@ -70,6 +70,24 @@ def test_ingest_document_job_skips_non_queued_app_jobs(status: JobStatus) -> Non
 
     job_service.get_job_by_rq_id.assert_called_once_with("rq-job-123")
     ingestion_service.ingest_document.assert_not_called()
+
+
+def test_ingest_document_job_retries_running_app_jobs() -> None:
+    rq_job = FakeRqJob()
+    app_job = FakeAppJob(id="job_123", document_id="doc_123", collection="docs", status=JobStatus.RUNNING)
+    job_service = Mock()
+    job_service.get_job_by_rq_id.return_value = app_job
+    ingestion_service = Mock()
+
+    with (
+        patch("app.workers.ingest_worker.get_current_job", return_value=rq_job),
+        patch("app.workers.ingest_worker.get_job_service", return_value=job_service),
+        patch("app.workers.ingest_worker.get_ingestion_service", return_value=ingestion_service),
+    ):
+        ingest_document_job("doc_123", "docs")
+
+    job_service.get_job_by_rq_id.assert_called_once_with("rq-job-123")
+    ingestion_service.ingest_document.assert_called_once_with("job_123", "doc_123", "docs")
 
 
 def test_ingest_document_job_marks_retry_exhausted_when_rq_reports_no_retries_left() -> None:

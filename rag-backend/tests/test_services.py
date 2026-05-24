@@ -7,6 +7,7 @@ import pytest
 from app.config import Settings
 from app.domain import DocumentRecord, DocumentStatus, JobRecord, JobStage, JobStatus, TextChunk
 from app.errors import NonRetryableIngestionError, RetryableIngestionError, ValidationError
+from app.infrastructure.queue.base import IngestionQueueItem
 from app.services.document_service import DocumentService
 from app.services.ingestion_service import IngestionService
 from app.services.job_service import JobService
@@ -145,23 +146,35 @@ class FakeQueue:
     def __init__(self) -> None:
         self.enqueued: list[tuple[str, str]] = []
         self.app_job_ids: list[str | None] = []
+        self.batch_calls: list[list[IngestionQueueItem]] = []
 
     def enqueue_ingestion(self, document_id: str, collection: str, app_job_id: str | None = None) -> str:
-        self.enqueued.append((document_id, collection))
-        self.app_job_ids.append(app_job_id)
-        return app_job_id or f"rq-{len(self.enqueued)}"
+        return self.enqueue_ingestions(
+            [IngestionQueueItem(document_id=document_id, collection=collection, app_job_id=app_job_id)]
+        )[0]
+
+    def enqueue_ingestions(self, items: list[IngestionQueueItem]) -> list[str]:
+        self.batch_calls.append(items)
+        rq_job_ids = []
+        for item in items:
+            self.enqueued.append((item.document_id, item.collection))
+            self.app_job_ids.append(item.app_job_id)
+            rq_job_ids.append(item.app_job_id or f"rq-{len(self.enqueued)}")
+        return rq_job_ids
 
 
 class FailingQueue:
     def enqueue_ingestion(self, document_id: str, collection: str, app_job_id: str | None = None) -> str:
         raise RuntimeError("queue unavailable")
 
+    def enqueue_ingestions(self, items: list[IngestionQueueItem]) -> list[str]:
+        raise RuntimeError("queue unavailable")
 
-class FailingOnSecondEnqueueQueue(FakeQueue):
-    def enqueue_ingestion(self, document_id: str, collection: str, app_job_id: str | None = None) -> str:
-        if len(self.enqueued) == 1:
-            raise RuntimeError("queue unavailable on second file")
-        return super().enqueue_ingestion(document_id, collection, app_job_id)
+
+class FailingBatchQueue(FakeQueue):
+    def enqueue_ingestions(self, items: list[IngestionQueueItem]) -> list[str]:
+        self.batch_calls.append(items)
+        raise RuntimeError("queue unavailable for batch")
 
 
 class RepositoryAwareQueue:
@@ -170,9 +183,32 @@ class RepositoryAwareQueue:
         self.observed_attached_before_enqueue = False
 
     def enqueue_ingestion(self, document_id: str, collection: str, app_job_id: str | None = None) -> str:
-        assert app_job_id is not None
-        self.observed_attached_before_enqueue = self.repository.get_job(app_job_id).rq_job_id == app_job_id
-        return app_job_id
+        return self.enqueue_ingestions(
+            [IngestionQueueItem(document_id=document_id, collection=collection, app_job_id=app_job_id)]
+        )[0]
+
+    def enqueue_ingestions(self, items: list[IngestionQueueItem]) -> list[str]:
+        self.observed_attached_before_enqueue = all(
+            item.app_job_id is not None and self.repository.get_job(item.app_job_id).rq_job_id == item.app_job_id
+            for item in items
+        )
+        return [item.app_job_id for item in items if item.app_job_id is not None]
+
+
+class BatchOrderCapturingQueue(FakeQueue):
+    def __init__(self, repository: FakeRepository) -> None:
+        super().__init__()
+        self.repository = repository
+        self.document_count_at_enqueue = 0
+        self.job_count_at_enqueue = 0
+
+    def enqueue_ingestion(self, document_id: str, collection: str, app_job_id: str | None = None) -> str:
+        raise AssertionError("DocumentService should use batch enqueue")
+
+    def enqueue_ingestions(self, items: list[IngestionQueueItem]) -> list[str]:
+        self.document_count_at_enqueue = len(self.repository.documents)
+        self.job_count_at_enqueue = len(self.repository.jobs)
+        return super().enqueue_ingestions(items)
 
 
 class AttachFailingRepository(FakeRepository):
@@ -294,6 +330,7 @@ def test_document_service_upload_files_saves_creates_jobs_and_enqueues(tmp_path:
     assert repository.get_job(job.id).rq_job_id == job.id
     assert queue.enqueued == [(document.id, "docs")]
     assert queue.app_job_ids == [job.id]
+    assert queue.batch_calls == [[IngestionQueueItem(document.id, "docs", job.id)]]
 
 
 def test_document_service_attaches_deterministic_rq_id_before_enqueue(tmp_path: Path) -> None:
@@ -351,9 +388,9 @@ def test_document_service_marks_failed_and_cleans_file_when_queue_fails(tmp_path
     assert not (tmp_path / document.id).exists()
 
 
-def test_document_service_compensates_entire_batch_when_later_enqueue_fails(tmp_path: Path) -> None:
+def test_document_service_batch_enqueues_only_after_all_documents_and_jobs_are_prepared(tmp_path: Path) -> None:
     repository = FakeRepository()
-    queue = FailingOnSecondEnqueueQueue()
+    queue = BatchOrderCapturingQueue(repository)
     service = DocumentService(
         repository=repository,
         job_service=JobService(repository),
@@ -361,7 +398,41 @@ def test_document_service_compensates_entire_batch_when_later_enqueue_fails(tmp_
         settings=Settings(upload_dir=tmp_path, allowed_extensions=[".txt"], max_upload_mb=1),
     )
 
-    with pytest.raises(RuntimeError, match="queue unavailable on second file"):
+    result = asyncio.run(
+        service.upload_files(
+            [
+                FakeUploadFile("first.txt", b"first file"),
+                FakeUploadFile("second.txt", b"second file"),
+            ],
+            "docs",
+        )
+    )
+
+    assert queue.document_count_at_enqueue == 2
+    assert queue.job_count_at_enqueue == 2
+    assert queue.enqueued == [("doc_1", "docs"), ("doc_2", "docs")]
+    assert queue.app_job_ids == ["job_1", "job_2"]
+    assert queue.batch_calls == [
+        [
+            IngestionQueueItem("doc_1", "docs", "job_1"),
+            IngestionQueueItem("doc_2", "docs", "job_2"),
+        ]
+    ]
+    assert [document.id for document in result["documents"]] == ["doc_1", "doc_2"]
+    assert [job.id for job in result["jobs"]] == ["job_1", "job_2"]
+
+
+def test_document_service_compensates_entire_batch_when_batch_enqueue_fails(tmp_path: Path) -> None:
+    repository = FakeRepository()
+    queue = FailingBatchQueue()
+    service = DocumentService(
+        repository=repository,
+        job_service=JobService(repository),
+        queue_client=queue,
+        settings=Settings(upload_dir=tmp_path, allowed_extensions=[".txt"], max_upload_mb=1),
+    )
+
+    with pytest.raises(RuntimeError, match="queue unavailable for batch"):
         asyncio.run(
             service.upload_files(
                 [
@@ -372,16 +443,22 @@ def test_document_service_compensates_entire_batch_when_later_enqueue_fails(tmp_
             )
         )
 
-    assert queue.enqueued == [("doc_1", "docs")]
+    assert queue.enqueued == []
+    assert queue.batch_calls == [
+        [
+            IngestionQueueItem("doc_1", "docs", "job_1"),
+            IngestionQueueItem("doc_2", "docs", "job_2"),
+        ]
+    ]
     assert set(repository.documents) == {"doc_1", "doc_2"}
     assert set(repository.jobs) == {"job_1", "job_2"}
     for document in repository.documents.values():
         assert document.status == DocumentStatus.FAILED
-        assert document.error == "queue unavailable on second file"
+        assert document.error == "queue unavailable for batch"
         assert not (tmp_path / document.id).exists()
     for job in repository.jobs.values():
         assert job.status == JobStatus.FAILED
-        assert job.error == "queue unavailable on second file"
+        assert job.error == "queue unavailable for batch"
 
 
 @pytest.mark.parametrize(

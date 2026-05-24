@@ -222,11 +222,11 @@ main() {
     exit 1
   fi
 
+  load_env
   resolve_backend_commands
   require_command "$PYTHON_BIN"
   ensure_python_dependencies
 
-  load_env
   ensure_local_embedding_dependencies
   start_redis
 

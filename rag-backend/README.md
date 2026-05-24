@@ -109,6 +109,12 @@ To reuse an existing RAG virtual environment instead of installing packages agai
 RAG_PYTHON="/mnt/f/Dev/Hermes/src/hermes-agent/venv/Scripts/python.exe" ./start.sh
 ```
 
+For one-click startup, put the same value in `rag-backend/.env`:
+
+```env
+RAG_PYTHON=/mnt/f/Dev/Hermes/src/hermes-agent/venv/Scripts/python.exe
+```
+
 On Windows PowerShell, run the same script through WSL/Git Bash and convert the Windows path to a shell-readable path, for example `F:\Dev\Hermes\...` becomes `/mnt/f/Dev/Hermes/...` in WSL.
 
 If you really want `start.sh` to install the optional local embedding runtime,

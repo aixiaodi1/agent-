@@ -189,6 +189,24 @@ function Wait-ForUrl {
     throw "$Name did not respond at $Url. Check logs in $LogDir."
 }
 
+function Warmup-EmbeddingApi {
+    param([string]$Url)
+
+    Write-Host "Warming up local embedding model..."
+    $body = @{
+        model = $env:EMBEDDING_MODEL
+        input = "warmup"
+    } | ConvertTo-Json -Compress
+
+    $response = Invoke-WebRequest -UseBasicParsing -Uri "$Url/v1/embeddings" -Method POST -ContentType "application/json" -Body $body -TimeoutSec 240
+    $payload = $response.Content | ConvertFrom-Json
+    $dimension = $payload.data[0].embedding.Count
+    if ($dimension -le 0) {
+        throw "Local embedding API warmup returned an empty embedding."
+    }
+    Write-Host "Local embedding model is warm. Dimension: $dimension"
+}
+
 function Stop-ChildProcess {
     param([System.Diagnostics.Process]$Process)
 
@@ -238,6 +256,13 @@ $frontendErr = Join-Path $LogDir "frontend.err.log"
 Write-Host "Starting local model API on port $ModelApiPort..."
 $modelApi = Start-Process -FilePath $Python -ArgumentList @("-m", "uvicorn", "app.model_api:app", "--port", $ModelApiPort) -WorkingDirectory $BackendDir -RedirectStandardOutput $modelApiOut -RedirectStandardError $modelApiErr -WindowStyle Hidden -PassThru
 
+Start-Sleep -Seconds 2
+if ($modelApi.HasExited) { throw "Local model API exited during startup. Check $modelApiErr" }
+Wait-ForUrl "$ModelApiUrl/health" "Local model API"
+if ($env:EMBEDDING_PROVIDER -eq "api") {
+    Warmup-EmbeddingApi $ModelApiUrl
+}
+
 Write-Host "Starting FastAPI on port $ApiPort..."
 $api = Start-Process -FilePath $Python -ArgumentList @("-m", "uvicorn", "app.main:app", "--reload", "--port", $ApiPort) -WorkingDirectory $BackendDir -RedirectStandardOutput $apiOut -RedirectStandardError $apiErr -WindowStyle Hidden -PassThru
 
@@ -245,17 +270,16 @@ Write-Host "Starting RQ worker for queue $env:RQ_QUEUE_NAME..."
 $worker = Start-Process -FilePath $Python -ArgumentList @("-m", "rq.cli", "worker", $env:RQ_QUEUE_NAME, "--url", $env:REDIS_URL, "--worker-class", "rq.SimpleWorker") -WorkingDirectory $BackendDir -RedirectStandardOutput $workerOut -RedirectStandardError $workerErr -WindowStyle Hidden -PassThru
 
 Write-Host "Starting frontend on port $FrontendPort..."
-$npm = (Get-Command npm.cmd -ErrorAction Stop).Source
-$frontend = Start-Process -FilePath $npm -ArgumentList @("run", "dev", "--", "-p", $FrontendPort, "-H", "127.0.0.1") -WorkingDirectory $RootDir -RedirectStandardOutput $frontendOut -RedirectStandardError $frontendErr -WindowStyle Hidden -PassThru
+$node = (Get-Command node.exe -ErrorAction Stop).Source
+$nextBin = Join-Path $RootDir "node_modules\next\dist\bin\next"
+$frontend = Start-Process -FilePath $node -ArgumentList @($nextBin, "dev", "-p", $FrontendPort, "-H", "127.0.0.1") -WorkingDirectory $RootDir -RedirectStandardOutput $frontendOut -RedirectStandardError $frontendErr -WindowStyle Hidden -PassThru
 
 try {
     Start-Sleep -Seconds 2
-    if ($modelApi.HasExited) { throw "Local model API exited during startup. Check $modelApiErr" }
     if ($api.HasExited) { throw "FastAPI exited during startup. Check $apiErr" }
     if ($worker.HasExited) { throw "RQ worker exited during startup. Check $workerErr" }
     if ($frontend.HasExited) { throw "Frontend exited during startup. Check $frontendErr" }
 
-    Wait-ForUrl "$ModelApiUrl/health" "Local model API"
     Wait-ForUrl $HealthUrl "FastAPI"
     Wait-ForUrl $FrontendUrl "Frontend"
 

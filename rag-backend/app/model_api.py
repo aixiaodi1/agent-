@@ -115,20 +115,57 @@ def create_model_api_app(
 
 def _sentence_transformer_factory(model_name: str) -> Callable[[], Any]:
     def load_model() -> Any:
-        from sentence_transformers import SentenceTransformer
-
-        return SentenceTransformer(model_name)
+        return _TransformersEmbeddingModel(model_name)
 
     return load_model
 
 
 def _cross_encoder_factory(model_name: str) -> Callable[[], Any]:
     def load_model() -> Any:
-        from sentence_transformers import CrossEncoder
-
-        return CrossEncoder(model_name)
+        return _TransformersRerankModel(model_name)
 
     return load_model
+
+
+class _TransformersEmbeddingModel:
+    def __init__(self, model_name: str) -> None:
+        import torch
+        from transformers import AutoModel, AutoTokenizer
+
+        self._torch = torch
+        self._tokenizer = AutoTokenizer.from_pretrained(model_name)
+        self._model = AutoModel.from_pretrained(model_name)
+        self._model.eval()
+
+    def encode(self, texts: list[str], normalize_embeddings: bool = True) -> list[list[float]]:
+        inputs = self._tokenizer(texts, padding=True, truncation=True, return_tensors="pt")
+        with self._torch.no_grad():
+            output = self._model(**inputs)
+
+        mask = inputs["attention_mask"].unsqueeze(-1)
+        embeddings = (output.last_hidden_state * mask).sum(dim=1) / mask.sum(dim=1)
+        if normalize_embeddings:
+            embeddings = self._torch.nn.functional.normalize(embeddings, p=2, dim=1)
+        return embeddings.tolist()
+
+
+class _TransformersRerankModel:
+    def __init__(self, model_name: str) -> None:
+        import torch
+        from transformers import AutoModelForSequenceClassification, AutoTokenizer
+
+        self._torch = torch
+        self._tokenizer = AutoTokenizer.from_pretrained(model_name)
+        self._model = AutoModelForSequenceClassification.from_pretrained(model_name)
+        self._model.eval()
+
+    def predict(self, pairs: list[tuple[str, str]]) -> list[float]:
+        queries = [query for query, _document in pairs]
+        documents = [document for _query, document in pairs]
+        inputs = self._tokenizer(queries, documents, padding=True, truncation=True, return_tensors="pt")
+        with self._torch.no_grad():
+            output = self._model(**inputs)
+        return [float(score) for score in output.logits.reshape(-1).tolist()]
 
 
 def _coerce_vector(vector: object) -> list[float]:

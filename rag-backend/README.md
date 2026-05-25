@@ -33,19 +33,28 @@ Copy `.env.example` to `.env` and set:
 
 Secrets stay in `.env`; `.env` is not committed.
 
-The default embedding mode is local SentenceTransformers through LangChain:
-
-```env
-EMBEDDING_PROVIDER=sentence-transformers
-EMBEDDING_MODEL=shibing624/text2vec-base-chinese
-```
-
-To use the HTTP Embedding API adapter instead, set:
+The default embedding mode calls the local model API:
 
 ```env
 EMBEDDING_PROVIDER=api
+LOCAL_MODEL_API_BASE_URL=http://localhost:9000
 EMBEDDING_API_BASE_URL=http://localhost:9000
-EMBEDDING_API_KEY=
+EMBEDDING_API_PATH=/v1/embeddings
+EMBEDDING_MODEL=shibing624/text2vec-base-chinese
+RERANK_API_BASE_URL=http://localhost:9000
+RERANK_API_PATH=/v1/rerank
+RERANK_MODEL=cross-encoder/mmarco-mMiniLMv2-L12-H384-v1
+```
+
+`start.bat` starts this local model API on port `9000`. It exposes:
+
+- `POST /v1/embeddings` for `shibing624/text2vec-base-chinese`
+- `POST /v1/rerank` for `cross-encoder/mmarco-mMiniLMv2-L12-H384-v1`
+
+To run embeddings inside the ingestion worker instead of using the HTTP model API, set:
+
+```env
+EMBEDDING_PROVIDER=sentence-transformers
 ```
 
 Make sure `CHROMA_PERSIST_DIR` points to a local directory that exists or can be created by the backend process, and that the process has permission to write there. The default local data directory is ignored by Git.
@@ -73,7 +82,7 @@ On Windows, you can double-click `start-wsl.bat` from the repository root. It op
 
 If your local embedding model already lives in a Windows virtual environment,
 double-click `start.bat` instead. It starts Redis through WSL, then runs FastAPI,
-the RQ worker, and the Next.js frontend with Windows Python/Node.
+the local model API, the RQ worker, and the Next.js frontend with Windows Python/Node.
 
 The script will:
 

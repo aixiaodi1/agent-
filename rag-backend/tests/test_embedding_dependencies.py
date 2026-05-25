@@ -17,7 +17,7 @@ def test_build_embedder_defaults_to_sentence_transformers(monkeypatch) -> None:
         FakeSentenceTransformersEmbeddingProvider,
     )
 
-    embedder = build_embedder(Settings())
+    embedder = build_embedder(Settings(_env_file=None))
 
     assert isinstance(embedder, FakeSentenceTransformersEmbeddingProvider)
     assert embedder.model_name == "shibing624/text2vec-base-chinese"

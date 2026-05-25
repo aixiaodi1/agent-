@@ -8,6 +8,7 @@ def test_settings_defaults_are_local_and_safe(tmp_path: Path) -> None:
         database_url=f"sqlite:///{tmp_path / 'rag.sqlite'}",
         upload_dir=tmp_path / "uploads",
         chroma_persist_dir=tmp_path / "chroma",
+        _env_file=None,
     )
 
     assert settings.app_env == "local"
@@ -31,6 +32,7 @@ def test_settings_parses_documented_allowed_extensions_env_value(
         database_url=f"sqlite:///{tmp_path / 'rag.sqlite'}",
         upload_dir=tmp_path / "uploads",
         chroma_persist_dir=tmp_path / "chroma",
+        _env_file=None,
     )
 
     assert settings.allowed_extensions == [".txt", ".md", ".pdf"]
@@ -46,6 +48,7 @@ def test_settings_parses_documented_batch_upload_limit_env_value(
         database_url=f"sqlite:///{tmp_path / 'rag.sqlite'}",
         upload_dir=tmp_path / "uploads",
         chroma_persist_dir=tmp_path / "chroma",
+        _env_file=None,
     )
 
     assert settings.max_upload_batch_mb == 25

@@ -8,6 +8,8 @@ $FrontendPort = if ($env:FRONTEND_PORT) { $env:FRONTEND_PORT } else { "3000" }
 $AdminUrl = if ($env:ADMIN_URL) { $env:ADMIN_URL } else { "http://localhost:$ApiPort/admin" }
 $FrontendUrl = if ($env:FRONTEND_URL) { $env:FRONTEND_URL } else { "http://127.0.0.1:$FrontendPort/" }
 $HealthUrl = if ($env:HEALTH_URL) { $env:HEALTH_URL } else { "http://localhost:$ApiPort/health" }
+$ModelApiPort = if ($env:LOCAL_MODEL_API_PORT) { $env:LOCAL_MODEL_API_PORT } else { "9000" }
+$ModelApiUrl = if ($env:LOCAL_MODEL_API_BASE_URL) { $env:LOCAL_MODEL_API_BASE_URL.TrimEnd("/") } else { "http://localhost:$ModelApiPort" }
 $LogDir = Join-Path $RootDir ".logs"
 
 function Import-DotEnv {
@@ -206,21 +208,35 @@ function Stop-ProcessOnPort {
 
 Import-DotEnv $EnvFile
 $Python = Resolve-Python
+$ModelApiPort = if ($env:LOCAL_MODEL_API_PORT) { $env:LOCAL_MODEL_API_PORT } else { $ModelApiPort }
+$ModelApiUrl = if ($env:LOCAL_MODEL_API_BASE_URL) { $env:LOCAL_MODEL_API_BASE_URL.TrimEnd("/") } else { "http://localhost:$ModelApiPort" }
+if (!$env:LOCAL_MODEL_API_BASE_URL) {
+    $env:LOCAL_MODEL_API_BASE_URL = $ModelApiUrl
+}
+if (($env:EMBEDDING_PROVIDER -eq "api") -and !$env:EMBEDDING_API_BASE_URL) {
+    $env:EMBEDDING_API_BASE_URL = $ModelApiUrl
+}
 New-Item -ItemType Directory -Force -Path $LogDir | Out-Null
 New-Item -ItemType Directory -Force -Path (Join-Path $BackendDir "data\uploads"), (Join-Path $BackendDir "data\chroma") | Out-Null
 
 Ensure-BackendDependencies $Python
 Ensure-LocalEmbeddingDependencies $Python
 Start-RedisInWsl
+Stop-ProcessOnPort $ModelApiPort
 Stop-ProcessOnPort $ApiPort
 Stop-ProcessOnPort $FrontendPort
 
+$modelApiOut = Join-Path $LogDir "model-api.out.log"
+$modelApiErr = Join-Path $LogDir "model-api.err.log"
 $apiOut = Join-Path $LogDir "fastapi.out.log"
 $apiErr = Join-Path $LogDir "fastapi.err.log"
 $workerOut = Join-Path $LogDir "worker.out.log"
 $workerErr = Join-Path $LogDir "worker.err.log"
 $frontendOut = Join-Path $LogDir "frontend.out.log"
 $frontendErr = Join-Path $LogDir "frontend.err.log"
+
+Write-Host "Starting local model API on port $ModelApiPort..."
+$modelApi = Start-Process -FilePath $Python -ArgumentList @("-m", "uvicorn", "app.model_api:app", "--port", $ModelApiPort) -WorkingDirectory $BackendDir -RedirectStandardOutput $modelApiOut -RedirectStandardError $modelApiErr -WindowStyle Hidden -PassThru
 
 Write-Host "Starting FastAPI on port $ApiPort..."
 $api = Start-Process -FilePath $Python -ArgumentList @("-m", "uvicorn", "app.main:app", "--reload", "--port", $ApiPort) -WorkingDirectory $BackendDir -RedirectStandardOutput $apiOut -RedirectStandardError $apiErr -WindowStyle Hidden -PassThru
@@ -234,10 +250,12 @@ $frontend = Start-Process -FilePath $npm -ArgumentList @("run", "dev", "--", "-p
 
 try {
     Start-Sleep -Seconds 2
+    if ($modelApi.HasExited) { throw "Local model API exited during startup. Check $modelApiErr" }
     if ($api.HasExited) { throw "FastAPI exited during startup. Check $apiErr" }
     if ($worker.HasExited) { throw "RQ worker exited during startup. Check $workerErr" }
     if ($frontend.HasExited) { throw "Frontend exited during startup. Check $frontendErr" }
 
+    Wait-ForUrl "$ModelApiUrl/health" "Local model API"
     Wait-ForUrl $HealthUrl "FastAPI"
     Wait-ForUrl $FrontendUrl "Frontend"
 
@@ -252,12 +270,14 @@ try {
     Write-Host "Press Ctrl+C to stop FastAPI, worker, and frontend."
 
     while ($true) {
+        if ($modelApi.HasExited) { throw "Local model API stopped. Check $modelApiErr" }
         if ($api.HasExited) { throw "FastAPI stopped. Check $apiErr" }
         if ($worker.HasExited) { throw "RQ worker stopped. Check $workerErr" }
         if ($frontend.HasExited) { throw "Frontend stopped. Check $frontendErr" }
         Start-Sleep -Seconds 2
     }
 } finally {
+    Stop-ChildProcess $modelApi
     Stop-ChildProcess $api
     Stop-ChildProcess $worker
     Stop-ChildProcess $frontend

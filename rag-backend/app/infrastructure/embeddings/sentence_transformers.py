@@ -33,7 +33,10 @@ class SentenceTransformersEmbeddingProvider:
 
     def _embed_batch(self, texts: list[str]) -> list[list[float]]:
         if callable(getattr(self._model, "encode", None)):
-            raw_embeddings = self._model.encode(texts, convert_to_numpy=False)
+            try:
+                raw_embeddings = self._model.encode(texts, convert_to_numpy=False, normalize_embeddings=True)
+            except TypeError:
+                raw_embeddings = self._model.encode(texts, convert_to_numpy=False)
         elif callable(getattr(self._model, "embed_documents", None)):
             raw_embeddings = self._model.embed_documents(texts)
         elif callable(getattr(self._model, "embed_query", None)):
@@ -48,6 +51,9 @@ class SentenceTransformersEmbeddingProvider:
 
 
 def _validate_vector(vector: object) -> list[float]:
+    if callable(getattr(vector, "tolist", None)):
+        vector = vector.tolist()
+
     if not isinstance(vector, list):
         raise NonRetryableIngestionError("Local embedding model returned a non-list embedding.")
     if not vector:
@@ -61,17 +67,12 @@ def _validate_vector(vector: object) -> list[float]:
 
 
 def _load_sentence_transformer_cls() -> Callable[..., Any]:
-    try:
-        module = __import__("sentence_transformers", fromlist=["SentenceTransformer"])
-        return getattr(module, "SentenceTransformer")
-    except (ImportError, AttributeError):
-        pass
-
     candidates = [
         ("langchain_huggingface", "HuggingFaceEmbeddings"),
         ("langchain_community.embeddings", "SentenceTransformerEmbeddings"),
         ("langchain.embeddings", "SentenceTransformerEmbeddings"),
         ("langchain.embeddings", "SentenceTransformersEmbeddings"),
+        ("sentence_transformers", "SentenceTransformer"),
     ]
     for module_name, class_name in candidates:
         try:

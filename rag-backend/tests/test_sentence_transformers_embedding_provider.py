@@ -32,6 +32,19 @@ class BadLangChainEmbeddings:
         return [[0.1, "bad"] for _text in texts]
 
 
+class ArrayLikeVector:
+    def tolist(self) -> list[float]:
+        return [0.75, 0.25]
+
+
+class ArrayLikeSentenceTransformerModel:
+    def __init__(self, model_name: str) -> None:
+        self.model_name = model_name
+
+    def encode(self, texts: list[str], convert_to_numpy: bool = False, normalize_embeddings: bool = True) -> list[ArrayLikeVector]:
+        return [ArrayLikeVector() for _text in texts]
+
+
 def test_sentence_transformers_provider_embeds_direct_sentence_transformer_in_batches() -> None:
     provider = SentenceTransformersEmbeddingProvider(
         model_name="shibing624/text2vec-base-chinese",
@@ -53,6 +66,16 @@ def test_sentence_transformers_provider_supports_langchain_compatible_classes() 
 
     assert provider.embed_texts(["one", "two", "three"]) == [[0.0, 0.5], [1.0, 0.5], [0.0, 0.5]]
     assert provider._model.documents == [["one", "two"], ["three"]]
+
+
+def test_sentence_transformers_provider_accepts_array_like_vectors() -> None:
+    provider = SentenceTransformersEmbeddingProvider(
+        model_name="local-model",
+        batch_size=2,
+        model_cls=ArrayLikeSentenceTransformerModel,
+    )
+
+    assert provider.embed_texts(["hello", "world"]) == [[0.75, 0.25], [0.75, 0.25]]
 
 
 def test_sentence_transformers_provider_rejects_invalid_vectors() -> None:

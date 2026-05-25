@@ -267,7 +267,13 @@ Write-Host "Starting FastAPI on port $ApiPort..."
 $api = Start-Process -FilePath $Python -ArgumentList @("-m", "uvicorn", "app.main:app", "--reload", "--port", $ApiPort) -WorkingDirectory $BackendDir -RedirectStandardOutput $apiOut -RedirectStandardError $apiErr -WindowStyle Hidden -PassThru
 
 Write-Host "Starting RQ worker for queue $env:RQ_QUEUE_NAME..."
-$worker = Start-Process -FilePath $Python -ArgumentList @("-m", "rq.cli", "worker", $env:RQ_QUEUE_NAME, "--url", $env:REDIS_URL, "--worker-class", "rq.SimpleWorker") -WorkingDirectory $BackendDir -RedirectStandardOutput $workerOut -RedirectStandardError $workerErr -WindowStyle Hidden -PassThru
+$workerCommand = @"
+while (`$true) {
+    & '$Python' -m rq.cli worker '$env:RQ_QUEUE_NAME' --url '$env:REDIS_URL' --worker-class rq.SimpleWorker --burst
+    Start-Sleep -Seconds 2
+}
+"@
+$worker = Start-Process -FilePath powershell.exe -ArgumentList @("-NoProfile", "-ExecutionPolicy", "Bypass", "-Command", $workerCommand) -WorkingDirectory $BackendDir -RedirectStandardOutput $workerOut -RedirectStandardError $workerErr -WindowStyle Hidden -PassThru
 
 Write-Host "Starting frontend on port $FrontendPort..."
 $node = (Get-Command node.exe -ErrorAction Stop).Source

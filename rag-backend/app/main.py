@@ -6,7 +6,10 @@ from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 
 from app.dependencies import close_cached_dependencies
+from app.observability import configure_logging
 from app.routers import admin, agent, collections, documents, health, ingestion_jobs
+
+configure_logging()
 
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"

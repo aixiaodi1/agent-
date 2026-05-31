@@ -161,6 +161,7 @@ def get_rag_query_service() -> RagQueryService:
         llm_provider=settings.llm_provider,
         retrieval_top_k=settings.rag_retrieval_top_k,
         rerank_top_k=settings.rag_rerank_top_k,
+        embedding_dimension=settings.embedding_dimension,
     )
 
 

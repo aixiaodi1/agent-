@@ -4,6 +4,7 @@ from fastapi import APIRouter, Depends, HTTPException, status
 from pydantic import BaseModel, Field
 
 from app.dependencies import get_llm_semaphore, get_rag_query_service
+from app.errors import RetryableIngestionError, ValidationError
 from app.sanitization import sanitize_error_message
 from app.services.rag_query_service import RagQueryService
 
@@ -35,8 +36,12 @@ def run_agent(
             agent_id=request.agent_id,
             thread_id=request.thread_id,
         )
+    except ValidationError as exc:
+        raise HTTPException(status_code=400, detail=str(exc))
+    except RetryableIngestionError as exc:
+        raise HTTPException(status_code=429, detail="服务繁忙，请稍后重试")
     except Exception as exc:
         detail = sanitize_error_message(str(exc))
-        raise HTTPException(status_code=status.HTTP_503_SERVICE_UNAVAILABLE, detail=f"RAG query failed: {detail}") from exc
+        raise HTTPException(status_code=500, detail=f"RAG query failed: {detail}") from exc
     finally:
         semaphore.release()

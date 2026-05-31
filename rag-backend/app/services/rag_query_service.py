@@ -1,3 +1,4 @@
+import hashlib
 import re
 from datetime import UTC, datetime
 from time import perf_counter
@@ -22,6 +23,7 @@ class RagQueryService:
         llm_provider: str = "llm",
         retrieval_top_k: int = 20,
         rerank_top_k: int = 5,
+        embedding_dimension: int = 768,
     ) -> None:
         self._embedder = embedder
         self._vector_store = vector_store
@@ -30,6 +32,9 @@ class RagQueryService:
         self._llm_provider = llm_provider
         self._retrieval_top_k = retrieval_top_k
         self._rerank_top_k = rerank_top_k
+        self._embedding_dimension = embedding_dimension
+        self._cache: dict[str, dict] = {}
+        self._cache_max_size = 100
 
     def run(self, prompt: str, collection: str, agent_id: str, thread_id: str | None) -> dict:
         run_id = f"run_{uuid4().hex}"
@@ -49,6 +54,17 @@ class RagQueryService:
         step_elapsed_ms = int((perf_counter() - step_start) * 1000)
         self._append_step(nodes, events, run_id, "receive_input", "Receive input", started_at, query, {"prompt": query, "durationMs": step_elapsed_ms})
 
+        # cache check
+        cache_key = self._cache_key(query, collection)
+        cached = self._cache.get(cache_key)
+        if cached is not None:
+            logger.info("cache_hit", extra={"extra_fields": {"run_id": run_id, "cache_key": cache_key}})
+            cached["id"] = run_id
+            cached["startedAt"] = started_at
+            cached["finishedAt"] = datetime.now(UTC).isoformat()
+            cached["latencyMs"] = int((perf_counter() - timer) * 1000)
+            return cached
+
         # analyze_intent
         step_start = perf_counter()
         intent = self._analyze_intent(query)
@@ -63,6 +79,10 @@ class RagQueryService:
         # retrieve_context
         step_start = perf_counter()
         query_embedding = self._embedder.embed_texts([intent["query"]])[0]
+        if not query_embedding or len(query_embedding) == 0:
+            raise ValueError("嵌入结果为空，请检查 embedding 服务")
+        if len(query_embedding) != self._embedding_dimension:
+            raise ValueError(f"嵌入维度异常: 期望 {self._embedding_dimension}，实际 {len(query_embedding)}")
         raw_matches = self._vector_store.query_chunks(collection, query_embedding, n_results=self._retrieval_top_k)
         step_elapsed_ms = int((perf_counter() - step_start) * 1000)
         self._append_step(
@@ -87,7 +107,7 @@ class RagQueryService:
             finished_at = datetime.now(UTC).isoformat()
             latency_ms = int((perf_counter() - timer) * 1000)
             self._append_step(nodes, events, run_id, "final_answer", "Final answer", finished_at, final_answer, {"finalAnswer": final_answer, "durationMs": 0, "totalMs": latency_ms}, event_type="final_answer")
-            return self._build_response(
+            response = self._build_response(
                 run_id=run_id,
                 prompt=prompt,
                 agent_id=agent_id,
@@ -103,6 +123,10 @@ class RagQueryService:
                 tokens=None,
                 generator_raw={},
             )
+            if len(self._cache) >= self._cache_max_size:
+                self._cache.pop(next(iter(self._cache)))
+            self._cache[cache_key] = response
+            return response
 
         # rerank_context
         step_start = perf_counter()
@@ -208,7 +232,7 @@ class RagQueryService:
             extra={"extra_fields": {"run_id": run_id, "total_ms": latency_ms}},
         )
 
-        return self._build_response(
+        response = self._build_response(
             run_id=run_id,
             prompt=prompt,
             agent_id=agent_id,
@@ -224,6 +248,13 @@ class RagQueryService:
             tokens=generation.get("tokens") if isinstance(generation.get("tokens"), dict) else None,
             generator_raw=generation.get("raw") if isinstance(generation.get("raw"), dict) else {},
         )
+        if len(self._cache) >= self._cache_max_size:
+            self._cache.pop(next(iter(self._cache)))
+        self._cache[cache_key] = response
+        return response
+
+    def _cache_key(self, prompt: str, collection: str) -> str:
+        return hashlib.md5(f"{prompt}:{collection}".encode()).hexdigest()
 
     def _analyze_intent(self, prompt: str) -> dict:
         return {

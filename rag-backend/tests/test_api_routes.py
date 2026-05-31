@@ -111,6 +111,22 @@ class FakeVectorStore:
     def list_collections(self) -> list[str]:
         return ["drafts", "guides"]
 
+    def query_chunks(self, collection: str, embedding: list[float], n_results: int = 5) -> list[dict]:
+        return [
+            {
+                "id": "doc_1:0",
+                "document": "Insurance responsibility includes the claim context.",
+                "metadata": {
+                    "collection": collection,
+                    "source_file": "guide.txt",
+                    "chunk_index": 0,
+                    "document_type": "insurance_clause",
+                    "section_title": "coverage",
+                },
+                "distance": 0.12,
+            }
+        ]
+
 
 class FailingVectorStore:
     def list_collections(self) -> list[str]:
@@ -441,3 +457,36 @@ def test_health_degrades_when_embedding_health_check_fails_without_leaking_error
     assert body["checks"]["embedding_api"] == {"status": "error", "error": "check_failed"}
     assert "fake-secret-host" not in response.text
     assert embedder.called is False
+
+
+def test_agent_run_queries_shared_chroma_collection() -> None:
+    embedder = FakeEmbedder()
+    client = make_client(
+        {
+            get_embedder: lambda: embedder,
+            get_vector_store: lambda: FakeVectorStore(),
+        }
+    )
+
+    response = client.post(
+        "/agent/run",
+        json={
+            "prompt": "What can be claimed?",
+            "agentId": "research-agent",
+            "threadId": "thread_debug",
+            "vectorProvider": "chroma",
+            "collection": "guides",
+            "debug": True,
+        },
+    )
+
+    assert response.status_code == 200
+    body = response.json()
+    assert body["mode"] == "real"
+    assert body["status"] == "succeeded"
+    assert body["prompt"] == "What can be claimed?"
+    assert body["requestJson"]["collection"] == "guides"
+    assert body["vectorMatches"][0]["provider"] == "chroma"
+    assert body["vectorMatches"][0]["collection"] == "guides"
+    assert body["vectorMatches"][0]["metadata"]["document_type"] == "insurance_clause"
+    assert body["nodes"][1]["id"] == "retrieve_context"

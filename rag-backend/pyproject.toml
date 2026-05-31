@@ -21,6 +21,12 @@ dev = [
   "pytest",
   "pytest-httpx"
 ]
+local-embeddings = [
+  "sentence-transformers"
+]
+
+[tool.setuptools.packages.find]
+include = ["app*"]
 
 [tool.pytest.ini_options]
 pythonpath = ["."]

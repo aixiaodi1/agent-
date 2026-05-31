@@ -19,12 +19,13 @@ class Settings(BaseSettings):
     chroma_persist_dir: Path = Path("./data/chroma")
     redis_url: str = "redis://localhost:6379/0"
     rq_queue_name: str = "rag-ingestion"
-    embedding_api_base_url: str = "http://localhost:9000"
+    embedding_provider: str = "sentence-transformers"
+    embedding_api_base_url: str = ""
     embedding_api_path: str = "/v1/embeddings"
     embedding_api_key: str = ""
     minimax_api_key: str = ""
-    embedding_model: str = "embo-01"
-    embedding_dimension: int = 1024
+    embedding_model: str = "shibing624/text2vec-base-chinese"
+    embedding_dimension: int = 768
     embedding_batch_size: int = 32
     chunk_size: int = 500
     chunk_overlap: int = 50

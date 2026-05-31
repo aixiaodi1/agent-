@@ -136,6 +136,14 @@ class ChromaVectorStore:
                 f"Chroma delete failed: {sanitize_error_message(str(exc))}"
             ) from exc
 
+    def delete_collection(self, name: str) -> None:
+        try:
+            self.client.delete_collection(name)
+        except Exception as exc:
+            raise RetryableIngestionError(
+                f"Chroma delete_collection failed: {sanitize_error_message(str(exc))}"
+            ) from exc
+
     def add_chunks(
         self,
         collection: str,

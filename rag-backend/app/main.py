@@ -1,3 +1,4 @@
+import time
 from collections.abc import AsyncIterator
 from contextlib import asynccontextmanager
 from pathlib import Path
@@ -5,14 +6,16 @@ from pathlib import Path
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
 from huggingface_hub.constants import HUGGINGFACE_HUB_CACHE
+from starlette.middleware.base import BaseHTTPMiddleware
 
 from app.dependencies import close_cached_dependencies, set_app_state
 from app.infrastructure.repositories.sqlite import SQLiteRepository
-from app.observability import configure_logging
+from app.observability import configure_logging, get_logger
 from app.retrieval.bm25_indexer import MemoryBM25Indexer
 from app.routers import admin, agent, collections, documents, health, ingestion_jobs
 
 configure_logging()
+logger = get_logger(__name__)
 
 STATIC_DIR = Path(__file__).resolve().parent / "static"
 
@@ -72,8 +75,26 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         close_cached_dependencies()
 
 
+class RequestLoggingMiddleware(BaseHTTPMiddleware):
+    async def dispatch(self, request, call_next):
+        start = time.time()
+        response = await call_next(request)
+        elapsed_ms = int((time.time() - start) * 1000)
+        logger.info(
+            "http_request",
+            extra={"extra_fields": {
+                "method": request.method,
+                "path": request.url.path,
+                "status": response.status_code,
+                "elapsed_ms": elapsed_ms,
+            }},
+        )
+        return response
+
+
 def create_app() -> FastAPI:
     app = FastAPI(title="RAG Backend Ingestion", version="0.1.0", lifespan=lifespan)
+    app.add_middleware(RequestLoggingMiddleware)
     app.mount("/static", StaticFiles(directory=STATIC_DIR), name="static")
     app.include_router(admin.router)
     app.include_router(agent.router)

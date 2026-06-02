@@ -38,8 +38,16 @@ class MemoryBM25Indexer:
     def rebuild(self, docs: list[BM25Doc | dict | str]) -> None:
         with self._lock:
             self._docs = [_to_doc(d) for d in docs]
+            if not self._docs:
+                self._bm25 = None
+                return
             tokenized = [self._tokenize(d.text) for d in self._docs]
             self._bm25 = BM25Okapi(tokenized, k1=self._k1, b=self._b)
+
+    def rebuild_from_repository(self, repository: Any) -> int:
+        docs = repository.list_all_chunks_for_bm25()
+        self.rebuild(docs)
+        return len(docs)
 
     def add(self, doc: BM25Doc | dict | str) -> None:
         with self._lock:

@@ -20,11 +20,8 @@ def ingest_document_job(document_id: str, collection: str) -> None:
     app_job = job_service.get_job_by_rq_id(rq_job.id)
     if app_job.status in {JobStatus.FAILED, JobStatus.SUCCEEDED}:
         logger.info(
-            "Skipping ingestion for app job %s with status %s, document %s, RQ job %s",
-            app_job.id,
-            app_job.status,
-            document_id,
-            rq_job.id,
+            "Skipping ingestion for terminal app job",
+            extra={"extra_fields": {"app_job_id": app_job.id, "status": app_job.status, "document_id": document_id, "rq_job_id": rq_job.id}},
         )
         return
 
@@ -34,17 +31,13 @@ def ingest_document_job(document_id: str, collection: str) -> None:
         ingestion_service.ingest_document(app_job.id, document_id, collection)
     except NonRetryableIngestionError:
         logger.exception(
-            "Ingestion worker consumed non-retryable failure for app job %s, document %s, RQ job %s",
-            app_job.id,
-            document_id,
-            rq_job.id,
+            "Non-retryable ingestion failure",
+            extra={"extra_fields": {"app_job_id": app_job.id, "document_id": document_id, "rq_job_id": rq_job.id}},
         )
     except Exception as exc:
         logger.exception(
-            "Ingestion worker failed for app job %s, document %s, RQ job %s",
-            app_job.id,
-            document_id,
-            rq_job.id,
+            "Retryable ingestion failure",
+            extra={"extra_fields": {"app_job_id": app_job.id, "document_id": document_id, "rq_job_id": rq_job.id}},
         )
         if rq_retry_is_exhausted(rq_job):
             ingestion_service.mark_retry_exhausted(app_job.id, document_id, sanitize_error_message(str(exc)))

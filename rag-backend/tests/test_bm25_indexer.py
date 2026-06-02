@@ -27,6 +27,12 @@ class TestMemoryBM25Indexer:
         indexer = MemoryBM25Indexer()
         assert indexer.search("test") == []
 
+    def test_rebuild_with_empty_docs_keeps_empty_index(self) -> None:
+        indexer = MemoryBM25Indexer()
+        indexer.rebuild([])
+
+        assert indexer.search("test") == []
+
     def test_add_and_search(self) -> None:
         indexer = MemoryBM25Indexer()
         indexer.add(BM25Doc(id="d1", text="保险理赔流程包括报案、定损、理赔", collection="default"))
@@ -58,6 +64,44 @@ class TestMemoryBM25Indexer:
         policy_a_results = indexer.search("保险", top_n=10, collection="policy_a")
         assert len(policy_a_results) == 1
         assert policy_a_results[0]["collection"] == "policy_a"
+
+    def test_rebuild_from_repository_uses_structured_chunk_rows(self) -> None:
+        class FakeRepository:
+            def list_all_chunks_for_bm25(self) -> list[dict]:
+                return [
+                    {
+                        "id": "c1",
+                        "text": "insurance liability payout",
+                        "collection": "policy_a",
+                        "metadata": {"content_type": "insurance_liability"},
+                    },
+                    {
+                        "id": "c2",
+                        "text": "exclusion drunk driving",
+                        "collection": "policy_b",
+                        "metadata": {"content_type": "exclusion"},
+                    },
+                ]
+
+        indexer = MemoryBM25Indexer()
+        count = indexer.rebuild_from_repository(FakeRepository())
+
+        assert count == 2
+        results = indexer.search("payout", collection="policy_a")
+        assert len(results) == 1
+        assert results[0]["id"] == "c1"
+        assert results[0]["metadata"]["content_type"] == "insurance_liability"
+
+    def test_rebuild_from_empty_repository_keeps_empty_index(self) -> None:
+        class FakeRepository:
+            def list_all_chunks_for_bm25(self) -> list[dict]:
+                return []
+
+        indexer = MemoryBM25Indexer()
+        count = indexer.rebuild_from_repository(FakeRepository())
+
+        assert count == 0
+        assert indexer.search("payout") == []
 
     def test_concurrent_add_and_search(self) -> None:
         import concurrent.futures
